@@ -1,0 +1,8 @@
+packages:
+  - mail-vue
+  - mail-worker
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - workerd

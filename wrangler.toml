@@ -1,0 +1,31 @@
+name = "cloud-mail-grok"
+main = "mail-worker/src/index.js"
+compatibility_date = "2025-06-04"
+keep_vars = true
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "db"
+database_name = "cloud-mail-grok"
+database_id = "5ea31a7d-056c-45e9-ac31-492b9b22f33f"
+
+[[kv_namespaces]]
+binding = "kv"
+id = "06121b225b3048f2bd9f3de3776556f0"
+
+[ai]
+binding = "ai"
+
+[assets]
+binding = "assets"
+directory = "./mail-worker/dist"
+not_found_handling = "single-page-application"
+run_worker_first = true
+
+[triggers]
+crons = ["0 16 * * *"]
+
+[build]
+command = "corepack pnpm --dir mail-vue install --frozen-lockfile && corepack pnpm --dir mail-vue run build"
