@@ -3,6 +3,10 @@ main = "mail-worker/src/index.js"
 compatibility_date = "2025-06-04"
 keep_vars = true
 
+[[routes]]
+pattern = "mailapi.web3wy.com"
+custom_domain = true
+
 [observability]
 enabled = true
 
