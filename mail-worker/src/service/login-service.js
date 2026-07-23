@@ -20,11 +20,13 @@ import { toUtc } from '../utils/date-uitil';
 import { t } from '../i18n/i18n.js';
 import verifyRecordService from './verify-record-service';
 
+
 const loginService = {
 
 	async register(c, params, oauth = false) {
 
-		const { email, password, token, code } = params;
+		let { email, password, token, code } = params;
+		email = String(email || '').trim().toLowerCase();
 
 		let { regKey, register, registerVerify, regVerifyCount, minEmailPrefix, emailPrefixFilter } = await settingService.query(c)
 
@@ -128,11 +130,13 @@ const loginService = {
 
 		const { salt, hash } = await saltHashUtils.hashPassword(password);
 
-		const userId = await userService.insert(c, { email, regKeyId,password: hash, salt, type: type || defType });
-
-		await accountService.insert(c, { userId: userId, email, name: emailUtils.getName(email) });
-
-		await userService.updateUserInfo(c, userId, true);
+		await userService.createWithAccount(c, {
+			email,
+			regKeyId,
+			password: hash,
+			salt,
+			type: type || defType,
+		});
 
 		if (regKey !== settingConst.regKey.CLOSE && type) {
 			await regKeyService.reduceCount(c, code, 1);

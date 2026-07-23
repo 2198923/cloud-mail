@@ -1,11 +1,8 @@
 name: 🚀 Deploy cloud-mail to Cloudflare Workers
 
+# Production pushes are deployed by Cloudflare Workers Builds. Keep this
+# workflow as an explicit fallback so two deployers cannot race each other.
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - "mail-worker/**"
-      - "mail-vue/**"
   workflow_dispatch:
 
 jobs:
@@ -14,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      NAME: ${{ secrets.NAME || vars.NAME || 'cloud-mail' }}
+      NAME: ${{ secrets.NAME || vars.NAME || 'cloud-mail-grok' }}
       CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN || vars.CUSTOM_DOMAIN }}
       DOMAIN: ${{ secrets.DOMAIN || vars.DOMAIN }}
       ADMIN: ${{ secrets.ADMIN || vars.ADMIN }}
@@ -45,7 +42,7 @@ jobs:
       - name: ⚙ 设置 pnpm / Set up pnpm
         uses: pnpm/action-setup@v4.1.0
         with:
-          version: 9
+          version: 10.15.1
 
       - name: ⚙ 设置 Node.js / Set up Node.js
         uses: actions/setup-node@v4
@@ -127,13 +124,11 @@ jobs:
           sed -i "s|\${CUSTOM_DOMAIN}|${CUSTOM_DOMAIN}|g" "$CONFIG_FILE"
           sed -i "s|\"\${DOMAIN}\"|${DOMAIN}|g" "$CONFIG_FILE"
           sed -i "s|\${ADMIN}|${ADMIN}|g" "$CONFIG_FILE"
-          sed -i "s|\${JWT_SECRET}|${JWT_SECRET}|g" "$CONFIG_FILE"
           sed -i "s|\${R2_BUCKET_NAME}|${R2_BUCKET_NAME}|g" "$CONFIG_FILE"
           sed -i "s|\${PROJECT_LINK}|${PROJECT_LINK}|g" "$CONFIG_FILE"
           sed -i "s|\${ANALYSIS_CACHE}|${ANALYSIS_CACHE}|g" "$CONFIG_FILE"
           sed -i "s|\${AI_MODEL}|${AI_MODEL}|g" "$CONFIG_FILE"
           sed -i "s|\${LINUXDO_CLIENT_ID}|${LINUXDO_CLIENT_ID}|g" "$CONFIG_FILE"
-          sed -i "s|\${LINUXDO_CLIENT_SECRET}|${LINUXDO_CLIENT_SECRET}|g" "$CONFIG_FILE"
           sed -i "s|\${LINUXDO_CALLBACK_URL}|${LINUXDO_CALLBACK_URL}|g" "$CONFIG_FILE"
           sed -i "s|\${LINUXDO_SWITCH}|${LINUXDO_SWITCH}|g" "$CONFIG_FILE"
           
@@ -220,13 +215,14 @@ jobs:
         working-directory: ./mail-worker
         run: |
           echo "🚀 Starting deployment..."
+          set +e
           pnpm wrangler deploy -c wrangler-action.toml 2>&1 \
             | tee deploy.log \
             | grep -v "https://.*\.workers\.dev" \
-            | sed -E 's/env\.domain .*/env.domain (***)/' \
-            || true
-          
+            | sed -E 's/env\.domain .*/env.domain (***)/'
           DEPLOY_EXIT_CODE=${PIPESTATUS[0]}
+          set -e
+
           if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
             exit 1
           fi
@@ -240,27 +236,12 @@ jobs:
           echo "worker_url=$WORKER_URL" >> $GITHUB_OUTPUT
           echo "✅ Setup completed."
 
-      - name: ♻️ 初始化数据库 / Initialize database
+      - name: 🔐 设置运行时 Secrets / Set runtime secrets
+        working-directory: ./mail-worker
         run: |
-          echo "🛠️ Starting database initialization..."
-          sleep 15
-          
-          WORKER_URL="${CUSTOM_DOMAIN:+https://$CUSTOM_DOMAIN}"
-          WORKER_URL="${WORKER_URL:-${{ steps.deploy.outputs.worker_url }}}"
-          
-          if [ -z "$WORKER_URL" ]; then
-            echo "❌ Preview URL not available. Please set CUSTOM_DOMAIN."
-            exit 1
-          fi
-          
-          HTTP_CODE=$(curl -sL -w "%{http_code}" -o response.txt "$WORKER_URL/api/init/${JWT_SECRET}")
-          RESPONSE_BODY=$(cat response.txt)
-
-          if [ "$RESPONSE_BODY" = "success" ]; then
-            echo "✅ Setup completed."
-          else
-            echo "❌ Failed. HTTP: $HTTP_CODE, Response: $RESPONSE_BODY"
-            exit 1
+          printf '%s' "$JWT_SECRET" | pnpm wrangler secret put jwt_secret --name "$NAME"
+          if [ -n "$LINUXDO_CLIENT_SECRET" ]; then
+            printf '%s' "$LINUXDO_CLIENT_SECRET" | pnpm wrangler secret put linuxdo_client_secret --name "$NAME"
           fi
 
       - name: 🗑️ 删除运行记录 / Delete workflow runs

@@ -31,5 +31,11 @@ run_worker_first = true
 [triggers]
 crons = ["0 16 * * *"]
 
+[vars]
+CF_EMAIL_ROUTING_ZONE_ID = "fea52fa74a3cb5c1d7ba332a9b82f9c9"
+CF_EMAIL_ROUTING_DOMAIN = "grokmail.web3wy.com"
+CF_EMAIL_ROUTING_WORKER = "cloud-mail-grok"
+CF_EMAIL_ROUTING_RULE_LIMIT = "200"
+
 [build]
-command = "corepack pnpm --dir mail-vue install --frozen-lockfile && corepack pnpm --dir mail-vue run build"
+command = "corepack pnpm --dir mail-worker install --frozen-lockfile && corepack pnpm --dir mail-worker run test:unit && corepack pnpm --dir mail-vue install --frozen-lockfile && corepack pnpm --dir mail-vue run build"

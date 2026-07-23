@@ -46,6 +46,10 @@ crons = ["0 16 * * *"]	#每天晚上12点执行每日任务,刷新分析缓存
 #domain = []				#邮件域名可可配置多个 示例: ["example1.com","example2.com"]
 #admin = ""				#管理员的邮箱	示例: admin@example.com
 #jwt_secret = ""			#jwt令牌的密钥,随便填一串字符串
+CF_EMAIL_ROUTING_ZONE_ID = "fea52fa74a3cb5c1d7ba332a9b82f9c9"
+CF_EMAIL_ROUTING_DOMAIN = "grokmail.web3wy.com"
+CF_EMAIL_ROUTING_WORKER = "cloud-mail-grok"
+CF_EMAIL_ROUTING_RULE_LIMIT = "200"
 
 [build]
-command = "if [ -d mail-vue ]; then VUE_DIR=mail-vue; else VUE_DIR=../mail-vue; fi; corepack pnpm --dir $VUE_DIR install --frozen-lockfile && corepack pnpm --dir $VUE_DIR run build"
+command = "if [ -d mail-vue ]; then WORKER_DIR=mail-worker; VUE_DIR=mail-vue; else WORKER_DIR=.; VUE_DIR=../mail-vue; fi; corepack pnpm --dir $WORKER_DIR install --frozen-lockfile && corepack pnpm --dir $WORKER_DIR run test:unit && corepack pnpm --dir $VUE_DIR install --frozen-lockfile && corepack pnpm --dir $VUE_DIR run build"

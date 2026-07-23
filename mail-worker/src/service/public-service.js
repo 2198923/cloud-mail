@@ -14,6 +14,7 @@ import { isDel, roleConst } from '../const/entity-const';
 import email from '../entity/email';
 import userService from './user-service';
 import KvConst from '../const/kv-const';
+import emailRoutingService from './email-routing-service';
 
 const publicService = {
 
@@ -97,15 +98,22 @@ const publicService = {
 	async addUser(c, params) {
 		const { list } = params;
 
-		if (list.length === 0) return;
+		if (!Array.isArray(list) || list.length === 0) return;
+		const seen = new Set();
 
 		for (const emailRow of list) {
+			emailRow.email = String(emailRow.email || '').trim().toLowerCase();
 			if (!verifyUtils.isEmail(emailRow.email)) {
 				throw new BizError(t('notEmail'));
 			}
 
 			if (!c.env.domain.includes(emailUtils.getDomain(emailRow.email))) {
 				throw new BizError(t('notEmailDomain'));
+			}
+			if (seen.has(emailRow.email)) throw new BizError(t('emailExistDatabase'));
+			seen.add(emailRow.email);
+			if (await userService.selectByEmailIncludeDel(c, emailRow.email)) {
+				throw new BizError(t('emailExistDatabase'));
 			}
 
 			const { salt, hash } = await saltHashUtils.hashPassword(
@@ -124,8 +132,6 @@ const publicService = {
 		const roleList = await roleService.roleSelectUse(c);
 		const defRole = roleList.find(roleRow => roleRow.isDefault === roleConst.isDefault.OPEN);
 
-		const userList = [];
-
 		for (const emailRow of list) {
 			let { email, hash, salt, roleName } = emailRow;
 			let type = defRole.roleId;
@@ -135,27 +141,27 @@ const publicService = {
 				type = roleRow ? roleRow.roleId : type;
 			}
 
-			const userSql = `INSERT INTO user (email, password, salt, type, os, browser, active_ip, create_ip, device, active_time, create_time)
-			VALUES ('${email}', '${hash}', '${salt}', '${type}', '${os}', '${browser}', '${activeIp}', '${activeIp}', '${device}', '${activeTime}', '${activeTime}')`
-
-			const accountSql = `INSERT INTO account (email, name, user_id)
-			VALUES ('${email}', '${emailUtils.getName(email)}', 0);`;
-
-			userList.push(c.env.db.prepare(userSql));
-			userList.push(c.env.db.prepare(accountSql));
-
+			emailRow.type = type;
 		}
 
-		userList.push(c.env.db.prepare(`UPDATE account SET user_id = (SELECT user_id FROM user WHERE user.email = account.email) WHERE user_id = 0;`))
-
+		const routeStates = await emailRoutingService.reserveRoutes(c, list.map((row) => row.email));
+		const statements = [];
+		for (const emailRow of list) {
+			statements.push(c.env.db.prepare(`
+				INSERT INTO user (email, password, salt, type, os, browser, active_ip, create_ip, device, active_time, create_time)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`).bind(emailRow.email, emailRow.hash, emailRow.salt, emailRow.type, os, browser, activeIp, activeIp, device, activeTime, activeTime));
+			statements.push(c.env.db.prepare(`
+				INSERT INTO account (email, name, user_id)
+				VALUES (?, ?, (SELECT user_id FROM user WHERE email = ? COLLATE NOCASE))
+			`).bind(emailRow.email, emailUtils.getName(emailRow.email), emailRow.email));
+		}
 		try {
-			await c.env.db.batch(userList);
+			await c.env.db.batch(statements);
 		} catch (e) {
-			if(e.message.includes('SQLITE_CONSTRAINT')) {
-				throw new BizError(t('emailExistDatabase'))
-			} else {
-				throw e
-			}
+			await emailRoutingService.rollbackCreatedRoutes(c, routeStates);
+			if (String(e.message || '').includes('SQLITE_CONSTRAINT')) throw new BizError(t('emailExistDatabase'));
+			throw e;
 		}
 
 	},

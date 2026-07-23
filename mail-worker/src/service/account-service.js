@@ -12,6 +12,7 @@ import turnstileService from './turnstile-service';
 import roleService from './role-service';
 import { t } from '../i18n/i18n';
 import verifyRecordService from './verify-record-service';
+import emailRoutingService from './email-routing-service';
 
 const accountService = {
 
@@ -20,6 +21,7 @@ const accountService = {
 		const { addEmailVerify , addEmail, manyEmail, addVerifyCount, minEmailPrefix, emailPrefixFilter } = await settingService.query(c);
 
 		let { email, token } = params;
+		email = String(email || '').trim().toLowerCase();
 
 
 		if (!(addEmail === settingConst.addEmail.OPEN && manyEmail === settingConst.manyEmail.OPEN)) {
@@ -88,7 +90,17 @@ const accountService = {
 		}
 
 
-		accountRow = await orm(c).insert(account).values({ email: email, userId: userId, name: emailUtils.getName(email) }).returning().get();
+		const routeState = await emailRoutingService.reserveRoute(c, email);
+		try {
+			accountRow = await orm(c).insert(account).values({ email: email, userId: userId, name: emailUtils.getName(email) }).returning().get();
+		} catch (error) {
+			try {
+				await emailRoutingService.rollbackCreatedRoute(c, email, routeState);
+			} catch {
+				// Preserve the D1 error; the route can be reconciled by its exact ID.
+			}
+			throw error;
+		}
 
 		if (addEmailVerify === settingConst.addEmailVerify.COUNT && !addVerifyOpen) {
 			const row = await verifyRecordService.increaseAddCount(c);
@@ -146,6 +158,9 @@ const accountService = {
 
 		const user = await userService.selectById(c, userId);
 		const accountRow = await this.selectById(c, accountId);
+		if (!user || !accountRow) {
+			throw new BizError(t('noUserAccount'));
+		}
 
 		if (accountRow.email === user.email) {
 			throw new BizError(t('delMyAccount'));
@@ -155,10 +170,22 @@ const accountService = {
 			throw new BizError(t('noUserAccount'));
 		}
 
-		await orm(c).update(account).set({ isDel: isDel.DELETE }).where(
-			and(eq(account.userId, userId),
-				eq(account.accountId, accountId)))
-			.run();
+		const routeState = await emailRoutingService.deleteRoute(c, accountRow.email);
+		try {
+			await orm(c).update(account).set({ isDel: isDel.DELETE }).where(
+				and(eq(account.userId, userId),
+					eq(account.accountId, accountId)))
+				.run();
+		} catch (error) {
+			if (routeState.deleted) {
+				try {
+					await emailRoutingService.ensureRoute(c, accountRow.email);
+				} catch {
+					// Preserve the authoritative D1 error; reconciliation can restore this address.
+				}
+			}
+			throw error;
+		}
 	},
 
 	selectById(c, accountId) {
@@ -168,17 +195,21 @@ const accountService = {
 			.get();
 	},
 
-	async insert(c, params) {
-		await orm(c).insert(account).values({ ...params }).returning();
-	},
-
-	async insertList(c, list) {
-		await orm(c).insert(account).values(list).run();
+	async selectByUserId(c, userId) {
+		return orm(c).select().from(account).where(eq(account.userId, userId)).all();
 	},
 
 	async physicsDeleteByUserIds(c, userIds) {
-		await emailService.physicsDeleteUserIds(c, userIds);
-		await orm(c).delete(account).where(inArray(account.userId,userIds)).run();
+		if (!userIds || userIds.length === 0) return;
+		const rows = await orm(c).select({ email: account.email }).from(account).where(inArray(account.userId, userIds)).all();
+		const routeStates = await emailRoutingService.deleteRoutes(c, rows.map((row) => row.email));
+		try {
+			await emailService.physicsDeleteUserIds(c, userIds);
+			await orm(c).delete(account).where(inArray(account.userId,userIds)).run();
+		} catch (error) {
+			await emailRoutingService.restoreDeletedRoutes(c, routeStates);
+			throw error;
+		}
 	},
 
 	async selectUserAccountCountList(c, userIds, del = isDel.NORMAL) {
@@ -201,13 +232,6 @@ const accountService = {
 		return num;
 	},
 
-	async restoreByEmail(c, email) {
-		await orm(c).update(account).set({isDel: isDel.NORMAL}).where(eq(account.email, email)).run();
-	},
-
-	async restoreByUserId(c, userId) {
-		await orm(c).update(account).set({isDel: isDel.NORMAL}).where(eq(account.userId, userId)).run();
-	},
 
 	async setName(c, params, userId) {
 		const { name, accountId } = params
@@ -242,8 +266,22 @@ const accountService = {
 
 	async physicsDelete(c, params) {
 		const { accountId } = params
-		await emailService.physicsDeleteByAccountId(c, accountId)
-		await orm(c).delete(account).where(eq(account.accountId, accountId)).run();
+		const accountRow = await orm(c).select().from(account).where(eq(account.accountId, accountId)).get();
+		if (!accountRow) return;
+		const routeState = await emailRoutingService.deleteRoute(c, accountRow.email);
+		try {
+			await emailService.physicsDeleteByAccountId(c, accountId)
+			await orm(c).delete(account).where(eq(account.accountId, accountId)).run();
+		} catch (error) {
+			if (routeState.deleted) {
+				try {
+					await emailRoutingService.ensureRoute(c, accountRow.email);
+				} catch {
+					// Preserve the authoritative D1 error; reconciliation can restore this address.
+				}
+			}
+			throw error;
+		}
 	},
 
 	async setAllReceive(c, params, userId) {

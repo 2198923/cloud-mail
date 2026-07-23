@@ -18,6 +18,7 @@ import { t } from '../i18n/i18n'
 import reqUtils from '../utils/req-utils';
 import {oauth} from "../entity/oauth";
 import oauthService from "./oauth-service";
+import emailRoutingService from './email-routing-service';
 
 const userService = {
 
@@ -73,9 +74,33 @@ const userService = {
 			.get();
 	},
 
-	async insert(c, params) {
-		const { userId } = await orm(c).insert(user).values({ ...params }).returning().get();
-		return userId;
+	async createWithAccount(c, params) {
+		const email = String(params.email || '').trim().toLowerCase();
+		const routeState = await emailRoutingService.reserveRoute(c, email);
+		const activeIp = reqUtils.getIp(c);
+		const { os, browser, device } = reqUtils.getUserAgent(c);
+		const activeTime = dayjs().format('YYYY-MM-DD HH:mm:ss');
+		const statements = [
+			c.env.db.prepare(`
+				INSERT INTO user (email, password, salt, type, reg_key_id, os, browser, active_ip, create_ip, device, active_time, create_time)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`).bind(email, params.password, params.salt, params.type, params.regKeyId || 0, os, browser, activeIp, activeIp, device, activeTime, activeTime),
+			c.env.db.prepare(`
+				INSERT INTO account (email, name, user_id)
+				VALUES (?, ?, (SELECT user_id FROM user WHERE email = ? COLLATE NOCASE ORDER BY user_id DESC LIMIT 1))
+			`).bind(email, emailUtils.getName(email), email),
+		];
+		try {
+			await c.env.db.batch(statements);
+			return { routeState };
+		} catch (error) {
+			try {
+				await emailRoutingService.rollbackCreatedRoute(c, email, routeState);
+			} catch {
+				// Preserve the D1 error; reconciliation can remove the exact rule by ID.
+			}
+			throw error;
+		}
 	},
 
 	selectByEmailIncludeDel(c, email) {
@@ -95,8 +120,24 @@ const userService = {
 	},
 
 	async delete(c, userId) {
-		await orm(c).update(user).set({ isDel: isDel.DELETE }).where(eq(user.userId, userId)).run();
-		await c.env.kv.delete(kvConst.AUTH_INFO + userId)
+		const userRow = await this.selectById(c, userId);
+		if (!userRow) throw new BizError(t('notExistUser'));
+		const accountRows = await accountService.selectByUserId(c, userId);
+		const activeAccounts = accountRows.filter((row) => row.isDel === isDel.NORMAL);
+		const routeStates = await emailRoutingService.deleteRoutes(c, activeAccounts.map((row) => row.email));
+		try {
+			await c.env.db.batch([
+				c.env.db.prepare('UPDATE user SET is_del = ? WHERE user_id = ?').bind(isDel.DELETE, userId),
+			]);
+		} catch (error) {
+			await emailRoutingService.restoreDeletedRoutes(c, routeStates);
+			throw error;
+		}
+		try {
+			await c.env.kv.delete(kvConst.AUTH_INFO + userId)
+		} catch {
+			// The D1 deletion is authoritative; an expired cache entry is cleaned up by TTL.
+		}
 	},
 
 	async physicsDelete(c, params) {
@@ -304,7 +345,8 @@ const userService = {
 
 	async add(c, params) {
 
-		const { email, type, password } = params;
+		let { email, type, password } = params;
+		email = String(email || '').trim().toLowerCase();
 
 		if (!c.env.domain.includes(emailUtils.getDomain(email))) {
 			throw new BizError(t('notEmailDomain'));
@@ -324,7 +366,7 @@ const userService = {
 			throw new BizError(t('isRegAccount'));
 		}
 
-		const role = roleService.selectById(c, type);
+		const role = await roleService.selectById(c, type);
 
 		if (!role) {
 			throw new BizError(t('roleNotExist'));
@@ -332,11 +374,7 @@ const userService = {
 
 		const { salt, hash } = await saltHashUtils.hashPassword(password);
 
-		const userId = await userService.insert(c, { email, password: hash, salt, type });
-
-		await userService.updateUserInfo(c, userId, true);
-
-		await accountService.insert(c, { userId: userId, email, type, name: emailUtils.getName(email) });
+		await this.createWithAccount(c, { email, password: hash, salt, type, regKeyId: 0 });
 	},
 
 	async resetDaySendCount(c) {
@@ -351,17 +389,23 @@ const userService = {
 
 	async restore(c, params) {
 		const { userId, type } = params
-		await orm(c)
-			.update(user)
-			.set({ isDel: isDel.NORMAL })
-			.where(eq(user.userId, userId))
-			.run();
-		const userRow = await this.selectById(c, userId);
-		await accountService.restoreByEmail(c, userRow.email);
-
+		const userRow = await this.selectByIdIncludeDel(c, userId);
+		if (!userRow) throw new BizError(t('notExistUser'));
+		const accountRows = await accountService.selectByUserId(c, userId);
+		const restoreAccounts = type ? accountRows : accountRows.filter((row) => row.isDel === isDel.NORMAL);
+		const routeStates = await emailRoutingService.ensureRoutes(c, restoreAccounts.map((row) => row.email));
+		const statements = [
+			c.env.db.prepare('UPDATE user SET is_del = ? WHERE user_id = ?').bind(isDel.NORMAL, userId),
+		];
 		if (type) {
-			await emailService.restoreByUserId(c, userId);
-			await accountService.restoreByUserId(c, userId);
+			statements.push(c.env.db.prepare('UPDATE account SET is_del = ? WHERE user_id = ?').bind(isDel.NORMAL, userId));
+			statements.push(c.env.db.prepare('UPDATE email SET is_del = ? WHERE user_id = ?').bind(isDel.NORMAL, userId));
+		}
+		try {
+			await c.env.db.batch(statements);
+		} catch (error) {
+			await emailRoutingService.rollbackCreatedRoutes(c, routeStates);
+			throw error;
 		}
 
 	},
