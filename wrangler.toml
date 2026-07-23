@@ -2,7 +2,6 @@ name = "cloud-mail-grok"
 main = "mail-worker/src/index.js"
 compatibility_date = "2025-06-04"
 keep_vars = true
-addresses = ["*@grokmail.web3wy.com"]
 
 [[routes]]
 pattern = "mailapi.web3wy.com"
