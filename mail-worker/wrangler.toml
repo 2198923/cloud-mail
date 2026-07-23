@@ -1,19 +1,23 @@
-name = "cloud-mail"
+name = "cloud-mail-grok"
 main = "src/index.js"
 compatibility_date = "2025-06-04"
 keep_vars = true
 
+[[routes]]
+pattern = "mailapi.web3wy.com"
+custom_domain = true
+
 [observability]
 enabled = true
 
-#[[d1_databases]]
-#binding = "db"			#d1数据库绑定名默认不可修改
-#database_name = ""		#d1数据库名字
-#database_id = ""		#d1数据库id
+[[d1_databases]]
+binding = "db"
+database_name = "cloud-mail-grok"
+database_id = "5ea31a7d-056c-45e9-ac31-492b9b22f33f"
 
-#[[kv_namespaces]]
-#binding = "kv"			#kv绑定名默认不可修改
-#id = ""					#kv数据库id
+[[kv_namespaces]]
+binding = "kv"
+id = "06121b225b3048f2bd9f3de3776556f0"
 
 #[[r2_buckets]]
 #binding = "r2"			#r2对象存储绑定名默认不可修改
@@ -44,4 +48,4 @@ crons = ["0 16 * * *"]	#每天晚上12点执行每日任务,刷新分析缓存
 #jwt_secret = ""			#jwt令牌的密钥,随便填一串字符串
 
 [build]
-command = "pnpm --prefix ../mail-vue install && pnpm --prefix ../mail-vue run build"
+command = "if [ -d mail-vue ]; then VUE_DIR=mail-vue; else VUE_DIR=../mail-vue; fi; corepack pnpm --dir $VUE_DIR install --frozen-lockfile && corepack pnpm --dir $VUE_DIR run build"
