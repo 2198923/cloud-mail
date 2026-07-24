@@ -1,0 +1,60 @@
+name: 🔍 Diagnose Email Routing (temporary)
+
+# 临时诊断：复现应用的 list/create/delete 规则调用链，只输出 success/错误码。
+# 取证完成后删除本文件。禁止在日志输出 Token、规则 matcher 列表或完整响应。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ZONE_ID: fea52fa74a3cb5c1d7ba332a9b82f9c9
+      MAIL_DOMAIN: grokmail.web3wy.com
+      ROUTE_WORKER: cloud-mail-grok
+    steps:
+      - name: Probe Cloudflare Email Routing API
+        env:
+          CF_EMAIL_ROUTING_TOKEN: ${{ secrets.CF_EMAIL_ROUTING_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CF_EMAIL_ROUTING_TOKEN" ]; then
+            echo "CF_EMAIL_ROUTING_TOKEN secret is empty"
+            exit 1
+          fi
+          base="https://api.cloudflare.com/client/v4"
+          api="$base/zones/${ZONE_ID}/email/routing"
+          auth="Authorization: Bearer ${CF_EMAIL_ROUTING_TOKEN}"
+
+          echo "== 1. token verify =="
+          curl -sS -m 20 -H "$auth" "$base/user/tokens/verify" \
+            | jq '{success, errors, status: (.result.status // null), expires_on: (.result.expires_on // null)}'
+
+          echo "== 2. email routing settings =="
+          curl -sS -m 20 -H "$auth" "$api" \
+            | jq '{success, errors, enabled: (.result.enabled // null), status: (.result.status // null)}'
+
+          echo "== 3. list rules (page 1) =="
+          curl -sS -m 20 -H "$auth" "$api/rules?per_page=50&page=1" \
+            | jq '{success, errors, result_info, rule_count: (try (.result | length) catch null)}'
+
+          echo "== 4. create probe rule =="
+          probe="diag-${GITHUB_RUN_ID}@${MAIL_DOMAIN}"
+          create=$(curl -sS -m 20 -X POST -H "$auth" -H "Content-Type: application/json" \
+            --data "{\"enabled\":true,\"matchers\":[{\"field\":\"to\",\"type\":\"literal\",\"value\":\"${probe}\"}],\"actions\":[{\"type\":\"worker\",\"value\":[\"${ROUTE_WORKER}\"]}]}" \
+            "$api/rules")
+          echo "$create" | jq '{success, errors, messages, created: (.result.id != null)}'
+          rule_id=$(echo "$create" | jq -r '.result.id // empty')
+
+          if [ -n "$rule_id" ]; then
+            echo "== 5. delete probe rule =="
+            curl -sS -m 20 -X DELETE -H "$auth" "$api/rules/${rule_id}" \
+              | jq '{success, errors}'
+          else
+            echo "== 5. skipped: probe rule was not created =="
+          fi
