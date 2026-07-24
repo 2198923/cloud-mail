@@ -1,22 +1,35 @@
 name: 🚀 Deploy cloud-mail to Cloudflare Workers
 
-# Production pushes are deployed by Cloudflare Workers Builds. Keep this
-# workflow as an explicit fallback so two deployers cannot race each other.
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/deploy-cloudflare.yml"
+      - "mail-worker/**"
+      - "mail-vue/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "wrangler.toml"
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-mail-grok-production
+  cancel-in-progress: false
 
 jobs:
   Deploy-cloud-mail:
     name: 🏗️ Build and Deploy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     env:
       NAME: ${{ secrets.NAME || vars.NAME || 'cloud-mail-grok' }}
       CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN || vars.CUSTOM_DOMAIN }}
       DOMAIN: ${{ secrets.DOMAIN || vars.DOMAIN }}
-      ADMIN: ${{ secrets.ADMIN || vars.ADMIN }}
-      JWT_SECRET: ${{ secrets.JWT_SECRET || vars.JWT_SECRET }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || vars.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
       D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID || vars.D1_DATABASE_ID }}
       KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID || vars.KV_NAMESPACE_ID }}
@@ -26,34 +39,36 @@ jobs:
       CLOUDFLARE_EMAIL: ${{ secrets.CF_EMAIL || vars.CF_EMAIL || false }}
       ANALYSIS_CACHE: ${{ secrets.ANALYSIS_CACHE || vars.ANALYSIS_CACHE || false }}
       LINUXDO_CLIENT_ID: ${{ secrets.LINUXDO_CLIENT_ID || vars.LINUXDO_CLIENT_ID }}
-      LINUXDO_CLIENT_SECRET: ${{ secrets.LINUXDO_CLIENT_SECRET || vars.LINUXDO_CLIENT_SECRET }}
       LINUXDO_CALLBACK_URL: ${{ secrets.LINUXDO_CALLBACK_URL || vars.LINUXDO_CALLBACK_URL }}
       LINUXDO_SWITCH: ${{ secrets.LINUXDO_SWITCH || vars.LINUXDO_SWITCH }}
 
 
-    outputs:
-      worker_url: ${{ steps.deploy.outputs.worker_url }}
-
-
     steps:
       - name: 🚚 检出代码仓库 / Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: ⚙ 设置 pnpm / Set up pnpm
-        uses: pnpm/action-setup@v4.1.0
+        uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
         with:
           version: 10.15.1
 
       - name: ⚙ 设置 Node.js / Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: "pnpm"
-          cache-dependency-path: "./mail-worker/pnpm-lock.yaml"
+          cache-dependency-path: |
+            ./pnpm-lock.yaml
+            ./mail-worker/pnpm-lock.yaml
+            ./mail-vue/pnpm-lock.yaml
 
       - name: 📦 安装依赖 / Install dependencies
         run: pnpm install --frozen-lockfile
-        working-directory: ./mail-worker
+
+      - name: 🧪 单测并构建 / Test and build
+        run: |
+          pnpm --dir ./mail-worker run test:unit
+          pnpm --dir ./mail-vue run build
 
       - name: 📡 禁用 Wrangler 遥测 / Disable wrangler telemetry
         working-directory: ./mail-worker
@@ -61,192 +76,161 @@ jobs:
 
       - name: 🛠️ 设置环境 / Set up environment
         working-directory: ./mail-worker
+        env:
+          ADMIN: ${{ secrets.ADMIN }}
+          LINUXDO_SECRET_CONFIGURED: ${{ secrets.LINUXDO_CLIENT_SECRET != '' }}
         run: |
-          
-          echo "🔐 Starting environment setup..."
-          
-          if [ -z "$JWT_SECRET" ] || grep -q '[?%#/\\]' <<< "$JWT_SECRET"; then
-            echo "❌ JWT_SECRET variable is empty or contains invalid characters (?, %, #, /, \\)."
-            exit 1
-          fi
-          
-          if ! jq -e 'type == "array"' <<< "$DOMAIN" ; then
-            echo "❌ DOMAIN variable must be a JSON array (e.g., [\"example.com\"])."
-            exit 1
-          fi
-          
-          if [ -z "$ADMIN" ]; then
-            echo "❌ ADMIN variable cannot be empty."
-            exit 1
-          fi
-          
-          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
-            echo "❌ CLOUDFLARE_ACCOUNT_ID variable cannot be empty."
-            exit 1
-          fi
-          
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "❌ CLOUDFLARE_API_TOKEN variable cannot be empty."
-            exit 1
-          fi
-          
-          if [ -z "$CUSTOM_DOMAIN" ]; then
-            echo "::warning:: CUSTOM_DOMAIN variable is not set."
-          fi
-          
-          CONFIG_FILE="wrangler-action.toml"
-          
-          if [ -z "$R2_BUCKET_NAME" ]; then
-            sed -i '/\[\[r2_buckets\]\]/,/^$/d' "$CONFIG_FILE"
-          fi
-          
-          if [ -z "$PROJECT_LINK" ]; then
-            sed -i '/^project_link = /d' "$CONFIG_FILE"
-          fi
-          
-          if [ -z "$LINUXDO_CLIENT_ID" ] || [ -z "$LINUXDO_CLIENT_SECRET" ]; then
-            sed -i '/^linuxdo_client_id = /,/^linuxdo_switch = /d' "$CONFIG_FILE"
-          fi
-          
-          if [ -z "$CUSTOM_DOMAIN" ]; then
-            sed -i '/\[\[routes\]\]/,/^$/d' "$CONFIG_FILE"
-          fi
-          
-          if [ "$(printf '%s' "$CLOUDFLARE_EMAIL" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
-            cat >> "$CONFIG_FILE" <<'EOF'
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
 
-          [[send_email]]
-          name = "email"
-          EOF
-          fi
+          const required = [
+            'NAME', 'CUSTOM_DOMAIN', 'DOMAIN', 'ADMIN', 'CLOUDFLARE_ACCOUNT_ID',
+            'D1_DATABASE_ID', 'KV_NAMESPACE_ID',
+          ];
+          for (const key of required) {
+            if (!process.env[key]) throw new Error(`${key} cannot be empty`);
+          }
 
-          sed -i "s|\${NAME}|${NAME}|g" "$CONFIG_FILE"
-          sed -i "s|\${CUSTOM_DOMAIN}|${CUSTOM_DOMAIN}|g" "$CONFIG_FILE"
-          sed -i "s|\"\${DOMAIN}\"|${DOMAIN}|g" "$CONFIG_FILE"
-          sed -i "s|\${ADMIN}|${ADMIN}|g" "$CONFIG_FILE"
-          sed -i "s|\${R2_BUCKET_NAME}|${R2_BUCKET_NAME}|g" "$CONFIG_FILE"
-          sed -i "s|\${PROJECT_LINK}|${PROJECT_LINK}|g" "$CONFIG_FILE"
-          sed -i "s|\${ANALYSIS_CACHE}|${ANALYSIS_CACHE}|g" "$CONFIG_FILE"
-          sed -i "s|\${AI_MODEL}|${AI_MODEL}|g" "$CONFIG_FILE"
-          sed -i "s|\${LINUXDO_CLIENT_ID}|${LINUXDO_CLIENT_ID}|g" "$CONFIG_FILE"
-          sed -i "s|\${LINUXDO_CALLBACK_URL}|${LINUXDO_CALLBACK_URL}|g" "$CONFIG_FILE"
-          sed -i "s|\${LINUXDO_SWITCH}|${LINUXDO_SWITCH}|g" "$CONFIG_FILE"
-          
-          echo "✅ Environment setup completed."
+          let domains;
+          try {
+            domains = JSON.parse(process.env.DOMAIN);
+          } catch {
+            throw new Error('DOMAIN must be valid JSON');
+          }
+          const dnsName = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+          if (!Array.isArray(domains) || domains.length === 0 ||
+              domains.some(value => typeof value !== 'string' ||
+                !dnsName.test(value.trim().toLowerCase()))) {
+            throw new Error('DOMAIN must be a non-empty JSON array of DNS names');
+          }
+          domains = domains.map(value => value.trim().toLowerCase());
+          if (!dnsName.test(process.env.CUSTOM_DOMAIN.toLowerCase())) {
+            throw new Error('CUSTOM_DOMAIN must be a DNS name');
+          }
+          if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(process.env.NAME)) {
+            throw new Error('NAME is not a valid Worker name');
+          }
+          if (!/^[a-f0-9]{32}$/.test(process.env.CLOUDFLARE_ACCOUNT_ID) ||
+              !/^[a-f0-9]{32}$/.test(process.env.KV_NAMESPACE_ID)) {
+            throw new Error('Account and KV IDs must be 32-character hexadecimal IDs');
+          }
+          if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(process.env.D1_DATABASE_ID)) {
+            throw new Error('D1_DATABASE_ID must be a canonical UUID');
+          }
+          const admin = process.env.ADMIN.trim().toLowerCase();
+          if (!domains.some(domain => admin.endsWith(`@${domain}`)) ||
+              !/^[^\s@]+@[^\s@]+$/.test(admin)) {
+            throw new Error('ADMIN must belong to one of the configured mail domains');
+          }
+          if (process.env.R2_BUCKET_NAME &&
+              !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(process.env.R2_BUCKET_NAME)) {
+            throw new Error('R2_BUCKET_NAME is invalid');
+          }
 
-      - name: ⚡ 设置KV数据库 / Set up KV database
-        working-directory: ./mail-worker
-        run: |
-          
-          CONFIG_FILE="wrangler-action.toml"
-          
-          if [ -n "$KV_NAMESPACE_ID" ]; then
-            sed -i "s|\${KV_NAMESPACE_ID}|${KV_NAMESPACE_ID}|g" "$CONFIG_FILE"
-            echo "✅ Using the database from environment variables."
-            exit 0
-          fi
-          
-          echo "🔍 Checking if the database exists..."
-          
-          set +e
-            KV_LIST=$(pnpm wrangler kv namespace list 2>&1)
-            STATUS=$?
-          set -e
-          
-          if [ $STATUS -ne 0 ]; then
-            echo "$KV_LIST"
-            exit 1
-          fi
-                  
-          if echo "$KV_LIST" | jq -e ".[] | select(.title == \"$NAME\")" >/dev/null; then
-            echo "✅ Database $NAME already exists."
-            KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title == \"$NAME\") | .id")
-            echo "KV_NAMESPACE_ID: $KV_ID"
-          else
-            echo "⚠️ Database $NAME does not exist. Starting creation..."
-            pnpm wrangler kv namespace create $NAME
-            KV_LIST=$(pnpm wrangler kv namespace list)
-            KV_ID=$(echo "$KV_LIST" | jq -r ".[] | select(.title == \"$NAME\") | .id")
-          fi
-          
-          sed -i "s|\${KV_NAMESPACE_ID}|$KV_ID|g" "$CONFIG_FILE"
-          echo "✅ Setup completed."
+          const stringReplacements = {
+            NAME: process.env.NAME,
+            CUSTOM_DOMAIN: process.env.CUSTOM_DOMAIN.toLowerCase(),
+            ADMIN: admin,
+            D1_DATABASE_ID: process.env.D1_DATABASE_ID,
+            KV_NAMESPACE_ID: process.env.KV_NAMESPACE_ID,
+            R2_BUCKET_NAME: process.env.R2_BUCKET_NAME || '',
+            PROJECT_LINK: process.env.PROJECT_LINK || '',
+            ANALYSIS_CACHE: String(process.env.ANALYSIS_CACHE || 'false').toLowerCase(),
+            AI_MODEL: process.env.AI_MODEL,
+            LINUXDO_CLIENT_ID: process.env.LINUXDO_CLIENT_ID || '',
+            LINUXDO_CALLBACK_URL: process.env.LINUXDO_CALLBACK_URL || '',
+            LINUXDO_SWITCH: process.env.LINUXDO_SWITCH || '',
+          };
 
-      - name: 🐬 设置D1数据库 / Set up D1 database
-        working-directory: ./mail-worker
-        run: |
-          
-          CONFIG_FILE="wrangler-action.toml"
-          
-          if [ -n "$D1_DATABASE_ID" ]; then
-            sed -i "s|\${D1_DATABASE_ID}|${D1_DATABASE_ID}|g" "$CONFIG_FILE"
-            echo "✅ Using the database from environment variables."
-            exit 0
-          fi
-          
-          echo "🔍 Checking if the database exists..."
-          
-          set +e
-            DB_LIST=$(pnpm wrangler d1 list --json 2>&1)
-            STATUS=$?
-          set -e
-          
-          if [ $STATUS -ne 0 ]; then
-            echo "$DB_LIST"
-            exit 1
-          fi
-          
-          if echo "$DB_LIST" | jq -e ".[] | select(.name == \"$NAME\")" >/dev/null; then
-            echo "✅ Database $NAME already exists."
-            D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid")
-            echo "D1_DATABASE_ID: $D1_ID"
-          else
-            echo "⚠️ Database $NAME does not exist. Starting creation..."
-            pnpm wrangler d1 create $NAME
-            DB_LIST=$(pnpm wrangler d1 list --json)
-            D1_ID=$(echo "$DB_LIST" | jq -r ".[] | select(.name == \"$NAME\") | .uuid")
-          fi
-          
-          sed -i "s|\${D1_DATABASE_ID}|$D1_ID|g" "$CONFIG_FILE"
-          echo "✅ Setup completed."
+          let config = await readFile('wrangler-action.toml', 'utf8');
+          // Dependencies, tests and the frontend were already built before any
+          // deployment credential entered the environment. Never run repository
+          // build code as a child of Wrangler with CLOUDFLARE_API_TOKEN present.
+          config = config.replace(/\n\[build\][\s\S]*$/, '\n');
+          if (!process.env.R2_BUCKET_NAME) {
+            config = config.replace(/\[\[r2_buckets\]\][\s\S]*?\n\n/, '');
+          }
+          if (!process.env.PROJECT_LINK) {
+            config = config.replace(/^project_link = .*\n/m, '');
+          }
+          if (!process.env.LINUXDO_CLIENT_ID ||
+              process.env.LINUXDO_SECRET_CONFIGURED !== 'true') {
+            config = config.replace(/^linuxdo_client_id = .*\n(?:.*\n)*?^linuxdo_switch = .*\n/m, '');
+          }
+          if (String(process.env.CLOUDFLARE_EMAIL).toLowerCase() === 'true') {
+            config += '\n[[send_email]]\nname = "email"\n';
+          }
+          config = config.replace('"${DOMAIN}"', JSON.stringify(domains));
+          for (const [name, value] of Object.entries(stringReplacements)) {
+            const placeholder = `\${${name}}`;
+            config = config.split(`"${placeholder}"`)
+              .join(JSON.stringify(value));
+          }
+          if (config.includes('${')) throw new Error('Unresolved Wrangler placeholder');
+          await writeFile('wrangler-action.toml', config);
+          NODE
 
       - name: 🚀 开始部署 / Start deployment
         id: deploy
         working-directory: ./mail-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "❌ CLOUDFLARE_API_TOKEN secret cannot be empty."
+            exit 1
+          fi
           echo "🚀 Starting deployment..."
           set +e
           pnpm wrangler deploy -c wrangler-action.toml 2>&1 \
-            | tee deploy.log \
-            | grep -v "https://.*\.workers\.dev" \
-            | sed -E 's/env\.domain .*/env.domain (***)/'
+            | sed -E -e 's/env\.domain .*/env.domain (***)/' -e 's/env\.admin .*/env.admin (***)/'
           DEPLOY_EXIT_CODE=${PIPESTATUS[0]}
           set -e
 
           if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
-            exit 1
+            exit "$DEPLOY_EXIT_CODE"
           fi
-          
-          WORKER_URL=$(grep -o "https://.*\.workers\.dev" deploy.log || echo "")
-          
-          if [ -n "$WORKER_URL" ]; then
-            echo "::add-mask::$WORKER_URL"
-          fi
-          
-          echo "worker_url=$WORKER_URL" >> $GITHUB_OUTPUT
-          echo "✅ Setup completed."
 
       - name: 🔐 设置运行时 Secrets / Set runtime secrets
         working-directory: ./mail-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          CF_EMAIL_ROUTING_TOKEN: ${{ secrets.CF_EMAIL_ROUTING_TOKEN }}
+          LINUXDO_CLIENT_SECRET: ${{ secrets.LINUXDO_CLIENT_SECRET }}
         run: |
-          printf '%s' "$JWT_SECRET" | pnpm wrangler secret put jwt_secret --name "$NAME"
-          if [ -n "$LINUXDO_CLIENT_SECRET" ]; then
-            printf '%s' "$LINUXDO_CLIENT_SECRET" | pnpm wrangler secret put linuxdo_client_secret --name "$NAME"
+          if [ ${#JWT_SECRET} -lt 32 ] || [ -z "$CF_EMAIL_ROUTING_TOKEN" ]; then
+            echo "❌ Required runtime secrets are missing or invalid."
+            exit 1
           fi
+          node -e '
+            const secrets = {
+              jwt_secret: process.env.JWT_SECRET,
+              CF_EMAIL_ROUTING_TOKEN: process.env.CF_EMAIL_ROUTING_TOKEN,
+            };
+            if (process.env.LINUXDO_CLIENT_SECRET) {
+              secrets.linuxdo_client_secret = process.env.LINUXDO_CLIENT_SECRET;
+            }
+            process.stdout.write(JSON.stringify(secrets));
+          ' | pnpm wrangler secret bulk --name "$NAME"
 
-      - name: 🗑️ 删除运行记录 / Delete workflow runs
-        uses: GitRML/delete-workflow-runs@main
-        continue-on-error: true
-        with:
-          retain_days: '1'
-          keep_minimum_runs: '0'
+      - name: 🩺 验证生产 API / Verify production API
+        run: |
+          node --input-type=module <<'NODE'
+          const url = `https://${process.env.CUSTOM_DOMAIN}/api/setting/websiteConfig`;
+          for (let attempt = 1; attempt <= 12; attempt++) {
+            try {
+              const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+              const body = await response.json();
+              if (response.ok && body?.code === 200) {
+                console.log(`✅ Production API healthy on attempt ${attempt}.`);
+                process.exit(0);
+              }
+            } catch (error) {
+              if (attempt === 12) console.error(error.message);
+            }
+            await new Promise(resolve => setTimeout(resolve, 5_000));
+          }
+          console.error('❌ Production API health check failed.');
+          process.exit(1);
+          NODE

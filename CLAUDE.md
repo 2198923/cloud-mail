@@ -12,8 +12,8 @@
 - 根目录 `wrangler.toml`、子目录 `mail-worker/wrangler.toml` 和 GitHub Actions 使用的 `mail-worker/wrangler-action.toml`，其 Worker 绑定与 Email Routing 非敏感变量必须保持一致；三者都必须启用 `keep_vars = true`，避免覆盖 Dashboard 变量和既有 Secret。
 - Token 只允许存为 Worker Secret，禁止写入 Git、Wrangler `[vars]`、日志或测试 fixture。
 - `jwt_secret` 同样只能是 Worker Secret；GitHub Actions 必须通过 stdin 执行 `wrangler secret put`，禁止把 `${JWT_SECRET}` 渲染进 TOML。
-- 生产 push 的唯一自动发布器是 Cloudflare Workers Builds；GitHub Actions 仅保留 `workflow_dispatch` 手动应急入口，禁止同时启用 push 自动部署。
-- 三份 Wrangler `[build]` 都必须先执行 `mail-worker` 的 `test:unit`，测试不通过时禁止上传 Worker。
+- 生产 push 的唯一自动发布器是 GitHub Actions `deploy-cloudflare.yml`；Cloudflare Workers Builds 的 Git trigger 必须保持删除状态，禁止两个发布器同时部署。
+- 三份 Wrangler `[build]` 都必须先执行 `mail-worker` 的 `test:unit`，测试不通过时禁止上传 Worker；GitHub Actions 还必须在注入部署 Token 前显式完成单测和前端构建，并从临时发布配置移除 `[build]`，禁止构建进程继承部署凭据。
 
 常用命令：
 
@@ -71,7 +71,7 @@ Worker 运行时配置：
   - `CF_EMAIL_ROUTING_WORKER`
   - `CF_EMAIL_ROUTING_RULE_LIMIT`
 
-Token 权限应仅限目标真实根 Zone 的 Email Routing Rules Edit。上线前至少做一次随机精确规则 `POST -> GET -> DELETE` 探针；应用和验收脚本不得调用 Catch-all 端点。
+Token 权限应仅限目标真实根 Zone 的 Email Routing Rules Write。上线前至少做一次随机精确规则 `POST -> GET -> DELETE` 探针；应用和验收脚本不得修改 Catch-all。
 
 ## 邮箱生命周期不变量
 
