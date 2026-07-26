@@ -1,12 +1,10 @@
 import BizError from '../error/biz-error';
 import constant from '../const/constant';
 import jwtUtils from '../utils/jwt-utils';
-
+import KvConst from '../const/kv-const';
+import dayjs from 'dayjs';
 import userService from '../service/user-service';
-import authSessionService from '../service/auth-session-service';
-import d1StateService from '../service/d1-state-service';
 import permService from '../service/perm-service';
-import { userConst } from '../const/entity-const';
 import { t } from '../i18n/i18n'
 import app from '../hono/hono';
 
@@ -105,7 +103,7 @@ app.use('*', async (c, next) => {
 
 	if (path.startsWith('/public')) {
 
-		const userPublicToken = await d1StateService.getValueCompat(c, 'public_token', 'public_key:');
+		const userPublicToken = await c.env.kv.get(KvConst.PUBLIC_KEY);
 		const publicToken = c.req.header(constant.TOKEN_HEADER);
 		if (publicToken !== userPublicToken) {
 			throw new BizError(t('publicTokenFail'), 401);
@@ -123,12 +121,13 @@ app.use('*', async (c, next) => {
 	}
 
 	const { userId, token } = result;
-	if (!await authSessionService.valid(c, userId, token)) {
+	const authInfo = await c.env.kv.get(KvConst.AUTH_INFO + userId, { type: 'json' });
+
+	if (!authInfo) {
 		throw new BizError(t('authExpired'), 401);
 	}
 
-	const userRow = await userService.selectById(c, userId);
-	if (!userRow || Number(userRow.status) === userConst.status.BAN) {
+	if (!authInfo.tokens.includes(token)) {
 		throw new BizError(t('authExpired'), 401);
 	}
 
@@ -138,7 +137,7 @@ app.use('*', async (c, next) => {
 
 	if (permIndex > -1) {
 
-		const permKeys = await permService.userPermKeys(c, userRow.userId);
+		const permKeys = await permService.userPermKeys(c, authInfo.user.userId);
 
 		const userPaths = permKeyToPaths(permKeys);
 
@@ -146,13 +145,22 @@ app.use('*', async (c, next) => {
 			return path.startsWith(item);
 		});
 
-		if (userPermIndex === -1 && userRow.email !== c.env.admin) {
+		if (userPermIndex === -1 && authInfo.user.email !== c.env.admin) {
 			throw new BizError(t('unauthorized'), 403);
 		}
 
 	}
 
-	c.set('user', userRow)
+	const refreshTime = dayjs(authInfo.refreshTime).startOf('day');
+	const nowTime = dayjs().startOf('day')
+
+	if (!nowTime.isSame(refreshTime)) {
+		authInfo.refreshTime = dayjs().toISOString();
+		await userService.updateUserInfo(c, authInfo.user.userId);
+		await c.env.kv.put(KvConst.AUTH_INFO + userId, JSON.stringify(authInfo), { expirationTtl: constant.TOKEN_EXPIRE });
+	}
+
+	c.set('user',authInfo.user)
 
 	return await next();
 });

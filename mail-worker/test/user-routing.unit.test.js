@@ -89,24 +89,9 @@ describe('userService 邮箱路由生命周期', () => {
 			'alias@grokmail.web3wy.com',
 		]);
 		expect(batch).toHaveBeenCalledTimes(1);
-		const userUpdates = prepared.filter((statement) => statement.sql.includes('UPDATE user SET is_del'));
-		const sessionDeletes = prepared.filter((statement) => statement.sql.includes('DELETE FROM auth_session'));
-		const legacyBlocks = prepared.filter((statement) => statement.sql.includes('INSERT INTO auth_session_legacy_block'));
-		expect(userUpdates).toHaveLength(1);
-		expect(userUpdates[0].sql).not.toContain('UPDATE account');
-		expect(sessionDeletes).toHaveLength(1);
-		expect(legacyBlocks).toHaveLength(1);
-	});
-
-	it('软删除的用户状态与会话撤销原子失败时恢复邮箱路由', async () => {
-		const { c, batch } = context();
-		vi.spyOn(userService, 'selectById').mockResolvedValue({ userId: 7, email: accounts[0].email });
-		const routeStates = [{ email: accounts[0].email, managed: true }];
-		mocks.routing.deleteRoutes.mockResolvedValue(routeStates);
-		batch.mockRejectedValueOnce(new Error('D1 revoke failed'));
-
-		await expect(userService.delete(c, 7)).rejects.toThrow('D1 revoke failed');
-		expect(mocks.routing.restoreDeletedRoutes).toHaveBeenCalledWith(c, routeStates);
+		expect(prepared).toHaveLength(1);
+		expect(prepared[0].sql).toContain('UPDATE user SET is_del');
+		expect(prepared[0].sql).not.toContain('UPDATE account');
 	});
 
 	it('普通恢复重建主邮箱和所有仍活跃别名，不恢复已删除别名', async () => {

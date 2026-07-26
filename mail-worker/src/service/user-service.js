@@ -4,7 +4,8 @@ import orm from '../entity/orm';
 import user from '../entity/user';
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import { emailConst, isDel, roleConst, userConst } from '../const/entity-const';
-
+import kvConst from '../const/kv-const';
+import KvConst from '../const/kv-const';
 import cryptoUtils from '../utils/crypto-utils';
 import emailService from './email-service';
 import dayjs from 'dayjs';
@@ -18,7 +19,6 @@ import reqUtils from '../utils/req-utils';
 import {oauth} from "../entity/oauth";
 import oauthService from "./oauth-service";
 import emailRoutingService from './email-routing-service';
-import authSessionService from './auth-session-service';
 
 const userService = {
 
@@ -63,12 +63,7 @@ const userService = {
 			throw new BizError(t('pwdMinLength'));
 		}
 		const { salt, hash } = await cryptoUtils.hashPassword(password);
-		await c.env.db.batch([
-			c.env.db.prepare('UPDATE user SET password = ?, salt = ? WHERE user_id = ?').bind(hash, salt, userId),
-			c.env.db.prepare(`INSERT INTO auth_session_legacy_block (user_id, blocked_at)
-				VALUES (?, CURRENT_TIMESTAMP) ON CONFLICT(user_id) DO UPDATE SET blocked_at = CURRENT_TIMESTAMP`).bind(userId),
-			c.env.db.prepare('DELETE FROM auth_session WHERE user_id = ?').bind(userId),
-		]);
+		await orm(c).update(user).set({ password: hash, salt: salt }).where(eq(user.userId, userId)).run();
 	},
 
 	selectByEmail(c, email) {
@@ -133,20 +128,21 @@ const userService = {
 		try {
 			await c.env.db.batch([
 				c.env.db.prepare('UPDATE user SET is_del = ? WHERE user_id = ?').bind(isDel.DELETE, userId),
-				c.env.db.prepare(`INSERT INTO auth_session_legacy_block (user_id, blocked_at)
-					VALUES (?, CURRENT_TIMESTAMP) ON CONFLICT(user_id) DO UPDATE SET blocked_at = CURRENT_TIMESTAMP`).bind(userId),
-				c.env.db.prepare('DELETE FROM auth_session WHERE user_id = ?').bind(userId),
 			]);
 		} catch (error) {
 			await emailRoutingService.restoreDeletedRoutes(c, routeStates);
 			throw error;
+		}
+		try {
+			await c.env.kv.delete(kvConst.AUTH_INFO + userId)
+		} catch {
+			// The D1 deletion is authoritative; an expired cache entry is cleaned up by TTL.
 		}
 	},
 
 	async physicsDelete(c, params) {
 		let { userIds } = params;
 		userIds = userIds.split(',').map(Number);
-		await authSessionService.removeUsers(c, userIds);
 		await accountService.physicsDeleteByUserIds(c, userIds);
 		await oauthService.deleteByUserIds(c, userIds);
 		await orm(c).delete(user).where(inArray(user.userId, userIds)).run();
@@ -295,6 +291,7 @@ const userService = {
 
 		const { password, userId } = params;
 		await this.resetPassword(c, { password }, userId);
+		await c.env.kv.delete(KvConst.AUTH_INFO + userId);
 	},
 
 	async setStatus(c, params) {
@@ -308,7 +305,7 @@ const userService = {
 			.run();
 
 		if (status === userConst.status.BAN) {
-			await authSessionService.removeUser(c, userId);
+			await c.env.kv.delete(KvConst.AUTH_INFO + userId);
 		}
 	},
 

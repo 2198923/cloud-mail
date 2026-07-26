@@ -1,5 +1,5 @@
-
-import settingEntity from '../entity/setting';
+import KvConst from '../const/kv-const';
+import setting from '../entity/setting';
 import orm from '../entity/orm';
 import {verifyRecordType} from '../const/entity-const';
 import fileUtils from '../utils/file-utils';
@@ -13,52 +13,69 @@ import userContext from '../security/user-context';
 const settingService = {
 
 	async refresh(c) {
-		const settingRow = await orm(c).select().from(settingEntity).get();
-		if (!settingRow) {
-			throw new BizError('数据库未初始化 Database not initialized.');
-		}
-		c.set?.('setting', this.normalize(c, settingRow));
-	},
-
-	normalize(c, settingRow) {
-		const setting = { ...settingRow };
-		try {
-			setting.resendTokens = typeof setting.resendTokens === 'string'
-				? JSON.parse(setting.resendTokens || '{}')
-				: (setting.resendTokens || {});
-		} catch {
-			setting.resendTokens = {};
-		}
-
-		let domainList = c.env.domain;
-		if (typeof domainList === 'string') {
-			try {
-				domainList = JSON.parse(domainList);
-			} catch {
-				throw new BizError(t('notJsonDomain'));
-			}
-		}
-		if (!Array.isArray(domainList) || domainList.length === 0) {
-			throw new BizError(t('noDomainVariable'));
-		}
-		setting.domainList = domainList.map(item => '@' + item);
-		setting.projectLink = c.env.project_link !== false && c.env.project_link !== 'false';
-		setting.linuxdoClientId = c.env.linuxdo_client_id;
-		setting.linuxdoCallbackUrl = c.env.linuxdo_callback_url;
-		setting.linuxdoSwitch = c.env.linuxdo_switch === true || c.env.linuxdo_switch === 'true';
-		setting.emailPrefixFilter = String(setting.emailPrefixFilter || '').split(',').filter(Boolean);
-		return setting;
+		const settingRow = await orm(c).select().from(setting).get();
+		settingRow.resendTokens = JSON.parse(settingRow.resendTokens);
+		c.set('setting', settingRow);
+		await c.env.kv.put(KvConst.SETTING, JSON.stringify(settingRow));
 	},
 
 	async query(c) {
+
 		if (c.get?.('setting')) {
-			return c.get('setting');
+			return c.get('setting')
 		}
-		const settingRow = await orm(c).select().from(settingEntity).get();
-		if (!settingRow) {
+
+		const setting = await c.env.kv.get(KvConst.SETTING, { type: 'json' });
+
+		if (!setting) {
 			throw new BizError('数据库未初始化 Database not initialized.');
 		}
-		const setting = this.normalize(c, settingRow);
+
+		let domainList = c.env.domain;
+
+		if (typeof domainList === 'string') {
+			try {
+				domainList = JSON.parse(domainList)
+			} catch (error) {
+				throw new BizError(t('notJsonDomain'));
+			}
+		}
+
+		if (!c.env.domain) {
+			throw new BizError(t('noDomainVariable'));
+		}
+
+		domainList = domainList.map(item => '@' + item);
+		setting.domainList = domainList;
+
+
+		let linuxdoSwitch = c.env.linuxdo_switch;
+		let projectLink = c.env.project_link;
+
+		if (typeof linuxdoSwitch === 'string' && linuxdoSwitch === 'true') {
+			linuxdoSwitch = true
+		} else if (linuxdoSwitch === true) {
+			linuxdoSwitch = true
+		} else {
+			linuxdoSwitch = false
+		}
+
+		if (typeof projectLink === 'string' && projectLink === 'false') {
+			projectLink = false
+		} else if (projectLink === false) {
+			projectLink = false
+		} else {
+			projectLink = true
+		}
+
+		setting.projectLink = projectLink;
+
+		setting.linuxdoClientId = c.env.linuxdo_client_id;
+		setting.linuxdoCallbackUrl = c.env.linuxdo_callback_url;
+		setting.linuxdoSwitch = linuxdoSwitch;
+
+		setting.emailPrefixFilter = setting.emailPrefixFilter.split(",").filter(Boolean);
+
 		c.set?.('setting', setting);
 		return setting;
 	},
@@ -123,7 +140,7 @@ const settingService = {
 		}
 
 		params.resendTokens = JSON.stringify(resendTokens);
-		await orm(c).update(settingEntity).set({ ...params }).returning().get();
+		await orm(c).update(setting).set({ ...params }).returning().get();
 		await this.refresh(c);
 	},
 
@@ -133,14 +150,14 @@ const settingService = {
 		if (!background) return
 
 		if (background.startsWith('http')) {
-			await orm(c).update(settingEntity).set({ background: '' }).run();
+			await orm(c).update(setting).set({ background: '' }).run();
 			await this.refresh(c)
 			return;
 		}
 
 		if (background) {
 			await r2Service.delete(c,background)
-			await orm(c).update(settingEntity).set({ background: '' }).run();
+			await orm(c).update(setting).set({ background: '' }).run();
 			await this.refresh(c)
 		}
 	},
@@ -167,7 +184,7 @@ const settingService = {
 
 		}
 
-		await orm(c).update(settingEntity).set({ background }).run();
+		await orm(c).update(setting).set({ background }).run();
 		await this.refresh(c);
 		return background;
 	},
@@ -175,7 +192,7 @@ const settingService = {
 
 	async setBlacklist(c, params) {
 		const { blackSubject, blackContent, blackFrom  } = params
-		await orm(c).update(settingEntity).set({ blackSubject, blackContent, blackFrom }).run();
+		await orm(c).update(setting).set({ blackSubject, blackContent, blackFrom }).run();
 		await this.refresh(c);
 		return this.get(c);
 	},

@@ -31,6 +31,8 @@ jobs:
       CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN || vars.CUSTOM_DOMAIN }}
       DOMAIN: ${{ secrets.DOMAIN || vars.DOMAIN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
+      D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID || vars.D1_DATABASE_ID }}
+      KV_NAMESPACE_ID: ${{ secrets.KV_NAMESPACE_ID || vars.KV_NAMESPACE_ID }}
       R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME || vars.R2_BUCKET_NAME }}
       PROJECT_LINK: ${{ secrets.PROJECT_LINK || vars.PROJECT_LINK }}
       AI_MODEL: ${{ secrets.AI_MODEL || vars.AI_MODEL || '@cf/meta/llama-3.1-8b-instruct' }}
@@ -81,6 +83,7 @@ jobs:
 
           const required = [
             'NAME', 'CUSTOM_DOMAIN', 'DOMAIN', 'ADMIN', 'CLOUDFLARE_ACCOUNT_ID',
+            'D1_DATABASE_ID', 'KV_NAMESPACE_ID',
           ];
           for (const key of required) {
             if (!process.env[key]) throw new Error(`${key} cannot be empty`);
@@ -105,10 +108,13 @@ jobs:
           if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(process.env.NAME)) {
             throw new Error('NAME is not a valid Worker name');
           }
-          if (!/^[a-f0-9]{32}$/.test(process.env.CLOUDFLARE_ACCOUNT_ID)) {
-            throw new Error('Account ID must be a 32-character hexadecimal ID');
+          if (!/^[a-f0-9]{32}$/.test(process.env.CLOUDFLARE_ACCOUNT_ID) ||
+              !/^[a-f0-9]{32}$/.test(process.env.KV_NAMESPACE_ID)) {
+            throw new Error('Account and KV IDs must be 32-character hexadecimal IDs');
           }
-
+          if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(process.env.D1_DATABASE_ID)) {
+            throw new Error('D1_DATABASE_ID must be a canonical UUID');
+          }
           const admin = process.env.ADMIN.trim().toLowerCase();
           if (!domains.some(domain => admin.endsWith(`@${domain}`)) ||
               !/^[^\s@]+@[^\s@]+$/.test(admin)) {
@@ -119,15 +125,12 @@ jobs:
             throw new Error('R2_BUCKET_NAME is invalid');
           }
 
-          const productionConfig = await readFile('wrangler.toml', 'utf8');
-          const d1Section = productionConfig.match(/\[\[d1_databases\]\][\s\S]*?binding\s*=\s*"db"[\s\S]*?database_id\s*=\s*"([a-f0-9-]{36})"/);
-          if (!d1Section) throw new Error('Production D1 binding is missing from wrangler.toml');
-
           const stringReplacements = {
             NAME: process.env.NAME,
             CUSTOM_DOMAIN: process.env.CUSTOM_DOMAIN.toLowerCase(),
             ADMIN: admin,
-            D1_DATABASE_ID: d1Section[1],
+            D1_DATABASE_ID: process.env.D1_DATABASE_ID,
+            KV_NAMESPACE_ID: process.env.KV_NAMESPACE_ID,
             R2_BUCKET_NAME: process.env.R2_BUCKET_NAME || '',
             PROJECT_LINK: process.env.PROJECT_LINK || '',
             ANALYSIS_CACHE: String(process.env.ANALYSIS_CACHE || 'false').toLowerCase(),
@@ -138,7 +141,6 @@ jobs:
           };
 
           let config = await readFile('wrangler-action.toml', 'utf8');
-          config = config.replace(/\[\[kv_namespaces\]\][\s\S]*?\n\n/, '');
           // Dependencies, tests and the frontend were already built before any
           // deployment credential entered the environment. Never run repository
           // build code as a child of Wrangler with CLOUDFLARE_API_TOKEN present.
@@ -209,35 +211,6 @@ jobs:
             }
             process.stdout.write(JSON.stringify(secrets));
           ' | pnpm wrangler secret bulk --name "$NAME"
-
-      - name: 🗄️ 迁移 D1 / Migrate D1
-        env:
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-        run: |
-          node --input-type=module <<'NODE'
-          const secret = process.env.JWT_SECRET;
-          if (!secret || secret.length < 32) {
-            console.error('❌ JWT_SECRET is missing or invalid.');
-            process.exit(1);
-          }
-          const url = `https://${process.env.CUSTOM_DOMAIN}/api/init/${encodeURIComponent(secret)}`;
-          for (let attempt = 1; attempt <= 12; attempt++) {
-            try {
-              const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-              const body = await response.text();
-              if (response.ok && body === 'success') {
-                console.log(`✅ D1 migration completed on attempt ${attempt}.`);
-                process.exit(0);
-              }
-              console.error(`D1 migration attempt ${attempt} failed: HTTP ${response.status}`);
-            } catch (error) {
-              console.error(`D1 migration attempt ${attempt} failed: ${error.message}`);
-            }
-            await new Promise(resolve => setTimeout(resolve, 5_000));
-          }
-          console.error('❌ D1 migration failed.');
-          process.exit(1);
-          NODE
 
       - name: 🩺 验证生产 API / Verify production API
         run: |
