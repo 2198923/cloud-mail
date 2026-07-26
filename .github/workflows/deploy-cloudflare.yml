@@ -31,7 +31,6 @@ jobs:
       CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN || vars.CUSTOM_DOMAIN }}
       DOMAIN: ${{ secrets.DOMAIN || vars.DOMAIN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
-      D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID || vars.D1_DATABASE_ID }}
       R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME || vars.R2_BUCKET_NAME }}
       PROJECT_LINK: ${{ secrets.PROJECT_LINK || vars.PROJECT_LINK }}
       AI_MODEL: ${{ secrets.AI_MODEL || vars.AI_MODEL || '@cf/meta/llama-3.1-8b-instruct' }}
@@ -82,7 +81,6 @@ jobs:
 
           const required = [
             'NAME', 'CUSTOM_DOMAIN', 'DOMAIN', 'ADMIN', 'CLOUDFLARE_ACCOUNT_ID',
-            'D1_DATABASE_ID',
           ];
           for (const key of required) {
             if (!process.env[key]) throw new Error(`${key} cannot be empty`);
@@ -110,9 +108,7 @@ jobs:
           if (!/^[a-f0-9]{32}$/.test(process.env.CLOUDFLARE_ACCOUNT_ID)) {
             throw new Error('Account ID must be a 32-character hexadecimal ID');
           }
-          if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(process.env.D1_DATABASE_ID)) {
-            throw new Error('D1_DATABASE_ID must be a canonical UUID');
-          }
+
           const admin = process.env.ADMIN.trim().toLowerCase();
           if (!domains.some(domain => admin.endsWith(`@${domain}`)) ||
               !/^[^\s@]+@[^\s@]+$/.test(admin)) {
@@ -123,11 +119,15 @@ jobs:
             throw new Error('R2_BUCKET_NAME is invalid');
           }
 
+          const productionConfig = await readFile('wrangler.toml', 'utf8');
+          const d1Section = productionConfig.match(/\[\[d1_databases\]\][\s\S]*?binding\s*=\s*"db"[\s\S]*?database_id\s*=\s*"([a-f0-9-]{36})"/);
+          if (!d1Section) throw new Error('Production D1 binding is missing from wrangler.toml');
+
           const stringReplacements = {
             NAME: process.env.NAME,
             CUSTOM_DOMAIN: process.env.CUSTOM_DOMAIN.toLowerCase(),
             ADMIN: admin,
-            D1_DATABASE_ID: process.env.D1_DATABASE_ID,
+            D1_DATABASE_ID: d1Section[1],
             R2_BUCKET_NAME: process.env.R2_BUCKET_NAME || '',
             PROJECT_LINK: process.env.PROJECT_LINK || '',
             ANALYSIS_CACHE: String(process.env.ANALYSIS_CACHE || 'false').toLowerCase(),
