@@ -1,10 +1,12 @@
 const kvObjService = {
 
 	async putObj(c, key, content, metadata) {
+		if (!c.env.kv) throw new Error('Object storage is not configured');
 		await c.env.kv.put(key, content, { metadata: metadata });
 	},
 
 	async deleteObj(c, keys) {
+		if (!c.env.kv) return;
 
 		if (typeof keys === 'string') {
 			keys = [keys];
@@ -18,6 +20,7 @@ const kvObjService = {
 	},
 
 	async getObj(c, key) {
+		if (!c.env.kv) return null;
 		const obj = await c.env.kv.getWithMetadata(key, { type: "arrayBuffer"});
 		if (!obj.value) {
 			return null;

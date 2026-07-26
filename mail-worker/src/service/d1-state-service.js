@@ -14,6 +14,7 @@ const d1StateService = {
 	async getValueCompat(c, key, legacyKvKey) {
 		const value = await this.getValue(c, key);
 		if (value !== null) return value;
+		if (!c.env.kv) return null;
 		const legacy = await c.env.kv.get(legacyKvKey);
 		if (legacy === null || legacy === undefined) return null;
 		await this.setValue(c, key, legacy);

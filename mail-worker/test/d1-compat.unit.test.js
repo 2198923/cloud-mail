@@ -35,4 +35,10 @@ describe('旧 KV 会话兼容', () => {
 		expect(await authSessionService.valid(c, 7, 'legacy-token')).toBe(false);
 		expect(kv.get).not.toHaveBeenCalled();
 	});
+
+	it('没有 KV binding 时 D1 miss 安全拒绝旧 token', async () => {
+		const { c } = context();
+		delete c.env.kv;
+		expect(await authSessionService.valid(c, 7, 'legacy-token')).toBe(false);
+	});
 });

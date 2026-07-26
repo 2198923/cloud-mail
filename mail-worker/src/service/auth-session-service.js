@@ -41,6 +41,7 @@ const authSessionService = {
 		`).bind(userId, token).first();
 		if (revoked?.revoked) return false;
 
+		if (!c.env.kv) return false;
 		const legacy = await c.env.kv.get(`auth-uid:${userId}`, { type: 'json' });
 		if (!legacy?.tokens?.includes(token)) return false;
 		await this.create(c, userId, token);

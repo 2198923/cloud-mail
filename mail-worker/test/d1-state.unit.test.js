@@ -50,4 +50,9 @@ describe('D1 应用状态', () => {
 		expect(kv.get).toHaveBeenCalledWith('public_key:');
 		expect(calls.some(c => c.sql.includes('INSERT INTO app_state'))).toBe(true);
 	});
+
+	it('没有 KV binding 且 D1 miss 时返回 null', async () => {
+		const { db } = fakeDb(null);
+		expect(await d1StateService.getValueCompat({ env: { db } }, 'public_token', 'public_key:')).toBeNull();
+	});
 });
