@@ -168,6 +168,17 @@ jobs:
           await writeFile('wrangler-action.toml', config);
           NODE
 
+      - name: 🗄️ 迁移 D1 / Migrate D1
+        working-directory: ./mail-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "❌ CLOUDFLARE_API_TOKEN secret cannot be empty."
+            exit 1
+          fi
+          pnpm wrangler d1 execute db --config wrangler-action.toml --remote --file migrations/0001_kv_hot_state_to_d1.sql --yes
+
       - name: 🚀 开始部署 / Start deployment
         id: deploy
         working-directory: ./mail-worker

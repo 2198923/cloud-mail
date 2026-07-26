@@ -3,7 +3,7 @@ import orm from '../entity/orm';
 import email from '../entity/email';
 import { desc, count, eq, and, ne, isNotNull } from 'drizzle-orm';
 import { emailConst } from '../const/entity-const';
-import kvConst from '../const/kv-const';
+import d1StateService from './d1-state-service';
 import dayjs from 'dayjs';
 import { toUtc } from '../utils/date-uitil';
 const analysisService = {
@@ -14,7 +14,7 @@ const analysisService = {
 		}
 
 		const cacheKey = this.echartsCacheKey(params);
-		const cache = await c.env.kv.get(cacheKey, { type: 'json' });
+		const cache = await d1StateService.getCache(c, cacheKey);
 
 		if (cache) {
 			return cache;
@@ -26,7 +26,7 @@ const analysisService = {
 	async refreshEchartsCacheByKey(c, cacheKey) {
 		const params = this.echartsParamsByCacheKey(cacheKey);
 		const data = await this.queryEcharts(c, params);
-		await c.env.kv.put(cacheKey, JSON.stringify(data));
+		await d1StateService.setCache(c, cacheKey, data);
 		return data;
 	},
 
@@ -35,9 +35,9 @@ const analysisService = {
 			return;
 		}
 
-		const { keys } = await c.env.kv.list({ prefix: kvConst.ANALYSIS_ECHARTS });
+		const keys = await d1StateService.cacheKeys(c, 'analysis_echarts:');
 
-		await Promise.all(keys.map(key => this.refreshEchartsCacheByKey(c, key.name)));
+		await Promise.all(keys.map(key => this.refreshEchartsCacheByKey(c, key)));
 	},
 
 	async queryEcharts(c, params) {
@@ -79,7 +79,7 @@ const analysisService = {
 			analysisDao.receiveDayCount(c, diffHours),
 			analysisDao.sendDayCount(c, diffHours),
 
-			c.env.kv.get(kvConst.SEND_DAY_COUNT + dayjs().format('YYYY-MM-DD')),
+			d1StateService.getDaily(c, 'send', dayjs().format('YYYY-MM-DD')),
 		]);
 
 
@@ -118,12 +118,12 @@ const analysisService = {
 	},
 
 	echartsCacheKey(params = {}) {
-		return kvConst.ANALYSIS_ECHARTS + encodeURIComponent(params.timeZone || 'UTC');
+		return 'analysis_echarts:' + encodeURIComponent(params.timeZone || 'UTC');
 	},
 
 	echartsParamsByCacheKey(cacheKey) {
 		return {
-			timeZone: decodeURIComponent(cacheKey.replace(kvConst.ANALYSIS_ECHARTS, ''))
+			timeZone: decodeURIComponent(cacheKey.replace('analysis_echarts:', ''))
 		};
 	},
 

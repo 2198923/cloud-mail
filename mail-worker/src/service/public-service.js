@@ -13,7 +13,7 @@ import dayjs from 'dayjs';
 import { isDel, roleConst } from '../const/entity-const';
 import email from '../entity/email';
 import userService from './user-service';
-import KvConst from '../const/kv-const';
+import d1StateService from './d1-state-service';
 import emailRoutingService from './email-routing-service';
 
 const publicService = {
@@ -172,7 +172,7 @@ const publicService = {
 
 		const uuid = uuidv4();
 
-		await c.env.kv.put(KvConst.PUBLIC_KEY, uuid);
+		await d1StateService.setValue(c, 'public_token', uuid);
 
 		return {token: uuid}
 	},

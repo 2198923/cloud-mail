@@ -16,7 +16,7 @@ import roleService from './role-service';
 import user from '../entity/user';
 import starService from './star-service';
 import dayjs from 'dayjs';
-import kvConst from '../const/kv-const';
+import d1StateService from './d1-state-service';
 import { t } from '../i18n/i18n'
 import domainUtils from '../utils/domain-uitls';
 import account from "../entity/account";
@@ -362,15 +362,7 @@ const emailService = {
 		}
 
 		const dateStr = dayjs().format('YYYY-MM-DD');
-		let daySendTotal = await c.env.kv.get(kvConst.SEND_DAY_COUNT + dateStr);
-
-		//记录每天发件次数统计
-		if (!daySendTotal) {
-			await c.env.kv.put(kvConst.SEND_DAY_COUNT + dateStr, JSON.stringify(receiveEmail.length), { expirationTtl: 60 * 60 * 24 });
-		} else  {
-			daySendTotal = Number(daySendTotal) + receiveEmail.length
-			await c.env.kv.put(kvConst.SEND_DAY_COUNT + dateStr, JSON.stringify(daySendTotal), { expirationTtl: 60 * 60 * 24 });
-		}
+		await d1StateService.incrementDaily(c, 'send', dateStr, receiveEmail.length);
 
 		return [ emailResult ];
 	},
