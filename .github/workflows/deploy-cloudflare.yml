@@ -1,16 +1,7 @@
 name: 🚀 Deploy cloud-mail to Cloudflare Workers
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/deploy-cloudflare.yml"
-      - "mail-worker/**"
-      - "mail-vue/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - "wrangler.toml"
+  # Cloudflare's connected Git repository is the sole automatic publisher.
   workflow_dispatch:
 
 permissions:

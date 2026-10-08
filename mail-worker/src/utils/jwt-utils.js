@@ -18,8 +18,8 @@ const jwtUtils = {
 	},
 
 	async verifyScoped(c, token, purpose) {
-		const payload = await this.verifyToken(c, token);
-		if (!payload || payload.purpose !== purpose) return null;
+		const payload = await this.verifyToken(c, token, 'cloud-mail:scoped');
+		if (!payload || payload.purpose !== purpose || !Number.isFinite(payload.exp) || payload.exp <= Math.floor(Date.now() / 1000)) return null;
 		return payload;
 	},
 
@@ -56,7 +56,7 @@ const jwtUtils = {
 		return `${data}.${signatureStr}`;
 	},
 
-	async verifyToken(c, token) {
+	async verifyToken(c, token, expectedDomain = 'JWT') {
 		try {
 			const [headerB64, payloadB64, signatureB64] = token.split('.');
 
@@ -64,10 +64,10 @@ const jwtUtils = {
 
 			const data = `${headerB64}.${payloadB64}`;
 			const header = JSON.parse(decoder.decode(base64urlDecode(headerB64)));
-			const domain = header.typ === 'cloud-mail:scoped' ? ':cloud-mail:scoped' : '';
+			if (header.typ !== expectedDomain) return null;
 			const key = await crypto.subtle.importKey(
 				'raw',
-				encoder.encode(`${c.env.jwt_secret}${domain}`),
+				encoder.encode(`${c.env.jwt_secret}${expectedDomain === 'cloud-mail:scoped' ? ':cloud-mail:scoped' : ''}`),
 				{ name: 'HMAC', hash: 'SHA-256' },
 				false,
 				['verify']

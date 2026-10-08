@@ -1,7 +1,7 @@
 import BizError from "../error/biz-error";
 import orm from "../entity/orm";
 import {oauth} from "../entity/oauth";
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or } from 'drizzle-orm';
 import userService from "./user-service";
 import loginService from "./login-service";
 import cryptoUtils from "../utils/crypto-utils";
@@ -232,10 +232,12 @@ const oauthService = {
 
 	async getById(c, oauthUserId, platform = 'linuxdo') {
 		const provider = this.normalizePlatform(platform);
-		const rows = await orm(c).select().from(oauth).where(eq(oauth.oauthUserId, oauthUserId)).limit(2).all();
-		const matches = rows.filter(row => this.normalizePlatform(row.platform) === provider);
-		if (matches.length > 1) throw new BizError('ambiguous oauth identity');
-		return matches[0];
+		const providerCondition = provider === 'linuxdo'
+			? or(eq(oauth.platform, 'linuxdo'), eq(oauth.platform, 0), eq(oauth.platform, '0'), isNull(oauth.platform))
+			: eq(oauth.platform, provider);
+		const rows = await orm(c).select().from(oauth).where(and(eq(oauth.oauthUserId, oauthUserId), providerCondition)).limit(2).all();
+		if (rows.length > 1) throw new BizError('ambiguous oauth identity');
+		return rows[0];
 	},
 
 	async deleteByUserId(c, userId) {
