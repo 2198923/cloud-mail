@@ -7,15 +7,18 @@ import loginService from "./login-service";
 import cryptoUtils from "../utils/crypto-utils";
 import settingService from "./setting-service";
 import {t} from '../i18n/i18n';
+import jwtUtils from '../utils/jwt-utils';
 
 const oauthService = {
 
 	async bindUser(c, params) {
 
-		const { email, oauthUserId, platform, code } = params;
-		this.assertPlatform(platform);
-
-		const oauthRow = await this.getById(c, oauthUserId, platform);
+		const { email, code, bindToken } = params;
+		const ticket = await jwtUtils.verifyScoped(c, bindToken, 'oauth-bind');
+		if (!ticket || !ticket.oauthId || !ticket.provider || !ticket.externalId) throw new BizError('invalid oauth bind proof');
+		const rows = await orm(c).select().from(oauth).where(eq(oauth.oauthId, ticket.oauthId)).limit(2).all();
+		if (rows.length !== 1 || String(rows[0].oauthUserId) !== String(ticket.externalId) || this.normalizePlatform(rows[0].platform) !== ticket.provider) throw new BizError('invalid oauth bind proof');
+		const oauthRow = rows[0];
 
 		let userRow = await userService.selectByIdIncludeDel(c, oauthRow.userId);
 
@@ -27,10 +30,11 @@ const oauthService = {
 
 		userRow = await userService.selectByEmail(c, email);
 
-		const updated = await orm(c).update(oauth).set({ userId: userRow.userId }).where(and(eq(oauth.oauthUserId, oauthUserId), eq(oauth.platform, platform))).returning().get();
+		const updated = await orm(c).update(oauth).set({ userId: userRow.userId }).where(and(eq(oauth.oauthId, ticket.oauthId), eq(oauth.userId, 0))).returning().get();
+		if (!updated) throw new BizError('oauth bind already used');
 		const jwtToken = await loginService.login(c, { email, password: null }, true);
 
-		return { userInfo: updated || { ...oauthRow, userId: userRow.userId }, token: jwtToken}
+		return { userInfo: updated, token: jwtToken}
 	},
 
 	async linuxDoLogin(c, params) {
@@ -190,7 +194,7 @@ const oauthService = {
 		const userRow = await userService.selectByIdIncludeDel(c, oauthRow.userId);
 
 		if (!userRow) {
-			return { userInfo: oauthRow, token: null };
+			return { userInfo: oauthRow, bindToken: await jwtUtils.signScoped(c, { oauthId: oauthRow.oauthId, provider: this.normalizePlatform(oauthRow.platform), externalId: String(oauthRow.oauthUserId) }, 'oauth-bind'), token: null };
 		}
 
 		const JwtToken = await loginService.login(c, { email: userRow.email, password: null }, true);
@@ -199,13 +203,13 @@ const oauthService = {
 
 	async saveUser(c, userInfo) {
 
-		this.assertPlatform(userInfo.platform);
-		const userInfoRow = await this.getById(c, userInfo.oauthUserId, userInfo.platform);
+		const provider = this.normalizePlatform(userInfo.platform);
+		const userInfoRow = await this.getById(c, userInfo.oauthUserId, provider);
 
 		if (!userInfoRow) {
 			return await orm(c).insert(oauth).values(userInfo).returning().get();
 		} else {
-			return await orm(c).update(oauth).set(userInfo).where(and(eq(oauth.oauthUserId, userInfo.oauthUserId), eq(oauth.platform, userInfo.platform))).returning().get();
+			return await orm(c).update(oauth).set(userInfo).where(eq(oauth.oauthId, userInfoRow.oauthId)).returning().get();
 		}
 
 	},
@@ -220,9 +224,18 @@ const oauthService = {
 		if (!['linuxdo', 'github', 'google'].includes(platform)) throw new BizError('invalid oauth platform');
 	},
 
-	async getById(c, oauthUserId, platform = 'linuxdo') {
+	normalizePlatform(platform) {
+		if (platform === null || platform === undefined || platform === 0 || platform === '0') return 'linuxdo';
 		this.assertPlatform(platform);
-		return await orm(c).select().from(oauth).where(and(eq(oauth.oauthUserId, oauthUserId), eq(oauth.platform, platform))).get();
+		return platform;
+	},
+
+	async getById(c, oauthUserId, platform = 'linuxdo') {
+		const provider = this.normalizePlatform(platform);
+		const rows = await orm(c).select().from(oauth).where(eq(oauth.oauthUserId, oauthUserId)).limit(2).all();
+		const matches = rows.filter(row => this.normalizePlatform(row.platform) === provider);
+		if (matches.length > 1) throw new BizError('ambiguous oauth identity');
+		return matches[0];
 	},
 
 	async deleteByUserId(c, userId) {

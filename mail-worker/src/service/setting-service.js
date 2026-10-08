@@ -82,8 +82,9 @@ const settingService = {
 
 		response.secretKey = response.secretKey ? `${response.secretKey.slice(0, 6)}******` : null;
 
-		Object.keys(response.resendTokens).forEach(key => {
-			response.resendTokens[key] = `${response.resendTokens[key].slice(0, 12)}******`;
+		Object.keys(response.resendTokens || {}).forEach(key => {
+			const value = response.resendTokens[key];
+			response.resendTokens[key] = typeof value === 'string' && value.endsWith('******') ? value : `${value.slice(0, 12)}******`;
 		});
 
 		response.s3SecretKey = response.s3SecretKey ? `${response.s3SecretKey.slice(0, 12)}******` : null;
@@ -120,10 +121,14 @@ const settingService = {
 		const secretFields = ['siteKey','secretKey','r2Domain','s3AccessKey','s3SecretKey','tgBotToken','webhookSecret','linuxdoClientSecret','githubClientSecret','googleClientSecret'];
 		params = { ...params };
 		for (const field of secretFields) if (params[field] === undefined || (typeof params[field] === 'string' && params[field].endsWith('******'))) delete params[field];
-		let resendTokens = { ...settingData.resendTokens, ...params.resendTokens };
-		Object.keys(resendTokens).forEach(domain => {
-			if (!resendTokens[domain]) delete resendTokens[domain];
-		});
+		const resendTokens = { ...settingData.resendTokens };
+		if (params.resendTokens && typeof params.resendTokens === 'object') {
+			for (const [domain, value] of Object.entries(params.resendTokens)) {
+				if (value === undefined || (typeof value === 'string' && value.endsWith('******'))) continue;
+				if (value === null || value === '') delete resendTokens[domain];
+				else resendTokens[domain] = value;
+			}
+		}
 
 		if (Array.isArray(params.emailPrefixFilter)) {
 			params.emailPrefixFilter = params.emailPrefixFilter + '';
@@ -139,7 +144,9 @@ const settingService = {
 
 		params.resendTokens = JSON.stringify(resendTokens);
 
-		await orm(c).update(setting).set({ ...params }).returning().get();
+		const columns = new Set(Object.keys(setting));
+		const update = Object.fromEntries(Object.entries(params).filter(([key]) => columns.has(key)));
+		await orm(c).update(setting).set({ ...update }).returning().get();
 		await this.refresh(c);
 	},
 
@@ -197,8 +204,7 @@ const settingService = {
 	},
 
 	async websiteConfig(c) {
-
-		const settingRow = await this.get(c, true);
+		const settingRow = await this.query(c);
 		const token = await userContext.getToken(c);
 
 		return {

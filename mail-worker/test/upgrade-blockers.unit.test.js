@@ -18,6 +18,6 @@ describe('upgrade blocker regression contracts', () => {
 
   it('uses safe destructive-delete default and migrates oauth platform', () => {
     expect(String(V31_V33_COLUMNS.find(([n]) => n === 'sync_delete')?.[1])).toContain('DEFAULT 1');
-    expect(String(V31_V33_COLUMNS.find(([n]) => n === 'oauth_platform')?.[1])).toContain('TEXT');
+    expect(V31_V33_COLUMNS.find(([n]) => n === 'oauth_platform')).toBeUndefined();
   });
 });

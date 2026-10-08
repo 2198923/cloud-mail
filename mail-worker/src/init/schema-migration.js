@@ -1,6 +1,5 @@
 const V31_V33_COLUMNS = [
   ['sync_delete', 'INTEGER NOT NULL DEFAULT 1'],
-  ['oauth_platform', "TEXT NOT NULL DEFAULT 'linuxdo'"],
   ['linuxdo_client_id', "TEXT NOT NULL DEFAULT ''"],
   ['linuxdo_client_secret', "TEXT NOT NULL DEFAULT ''"],
   ['github_client_id', "TEXT NOT NULL DEFAULT ''"],
@@ -32,6 +31,7 @@ const V31_V33_INDEXES = [
   ['idx_oauth_oauth_user_id', 'oauth(oauth_user_id)'],
   ['idx_oauth_user_id', 'oauth(user_id)'],
   ['idx_oauth_provider_user', 'oauth(oauth_user_id, platform)'],
+  ['ux_oauth_provider_user', "oauth(oauth_user_id, CASE WHEN platform IS NULL OR platform = 0 OR platform = '0' THEN 'linuxdo' ELSE platform END)"],
   ['idx_email_name_nocase', 'email(name COLLATE NOCASE)'],
   ['idx_email_subject_nocase', 'email(subject COLLATE NOCASE)'],
   ['idx_user_email_nocase', 'user(email COLLATE NOCASE)'],
@@ -57,10 +57,15 @@ export async function migrateV31ToV33(db) {
       columns.add(name);
     }
   }
+  const oauthTables = await rows(db, "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'oauth'");
+  const oauthColumns = new Set((await rows(db, 'PRAGMA table_info(oauth)')).map(row => row.name));
+  if (oauthTables.length > 0 && !oauthColumns.has('platform')) {
+    await db.prepare("ALTER TABLE oauth ADD COLUMN platform TEXT NOT NULL DEFAULT 'linuxdo'").run();
+  }
   const indexes = new Set((await rows(db, "SELECT name FROM sqlite_master WHERE type = 'index'")).map(row => row.name));
   for (const [name, expression] of V31_V33_INDEXES) {
     if (!indexes.has(name)) {
-      await db.prepare(`CREATE INDEX IF NOT EXISTS ${name} ON ${expression}`).run();
+      await db.prepare(`CREATE ${name.startsWith('ux_') ? 'UNIQUE ' : ''}INDEX IF NOT EXISTS ${name} ON ${expression}`).run();
       indexes.add(name);
     }
   }

@@ -202,6 +202,7 @@ const oauthProviders = computed(() => {
 const bindForm = reactive({
   email: '',
   oauthUserId: '',
+  bindToken: '',
   code: ''
 })
 
@@ -319,6 +320,7 @@ async function oauthGetUser() {
   loginFns[provider](code, window.location.origin + '/login').then(data => {
 
     bindForm.oauthUserId = data.userInfo.oauthUserId;
+    bindForm.bindToken = data.bindToken;
 
     if (!data.token) {
       showBindForm.value = true
@@ -387,7 +389,7 @@ function bind() {
 
   }
 
-  const form = {email, oauthUserId: bindForm.oauthUserId, code: bindForm.code}
+  const form = {email, bindToken: bindForm.bindToken, code: bindForm.code}
 
   bindLoading.value = true
   oauthBindUser(form).then(data => {

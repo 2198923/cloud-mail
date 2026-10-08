@@ -9,9 +9,11 @@ function database(columns = ['sync_delete']) {
       return {
         bind() { return this; },
         async all() {
-          if (sql.includes('PRAGMA table_info')) {
+          if (sql.includes('PRAGMA table_info(setting)')) {
             return { results: [...state.columns].map(name => ({ name })) };
           }
+          if (sql.includes('PRAGMA table_info(oauth)')) return { results: [] };
+          if (sql.includes("sqlite_master") && sql.includes("type = 'table'")) return { results: [] };
           if (sql.includes("sqlite_master")) {
             return { results: [...state.indexes].map(name => ({ name })) };
           }
@@ -21,7 +23,7 @@ function database(columns = ['sync_delete']) {
           state.executed.push(sql);
           const column = sql.match(/ADD COLUMN (\w+)/i)?.[1];
           if (column) state.columns.add(column);
-          const index = sql.match(/CREATE INDEX IF NOT EXISTS (\w+)/i)?.[1];
+          const index = sql.match(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS (\w+)/i)?.[1];
           if (index) state.indexes.add(index);
           return { success: true };
         },
@@ -39,7 +41,7 @@ describe('controlled v3.1-v3.3 schema migration', () => {
     expect(firstRunCount).toBeGreaterThan(0);
     expect(db.state.executed.length).toBe(firstRunCount);
     expect(db.state.columns).toEqual(new Set([
-      'sync_delete', 'oauth_platform', 'linuxdo_client_id', 'linuxdo_client_secret',
+      'sync_delete', 'linuxdo_client_id', 'linuxdo_client_secret',
       'github_client_id', 'github_client_secret', 'google_client_id',
       'google_client_secret', 'linuxdo_switch', 'github_switch', 'google_switch',
       'auto_clean_days', 'auto_clean_exclude', 'webhook_url', 'webhook_status',
