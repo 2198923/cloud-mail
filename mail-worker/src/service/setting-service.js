@@ -23,7 +23,7 @@ const settingService = {
 	async query(c) {
 
 		if (c.get?.('setting')) {
-			return c.get('setting')
+			return structuredClone(c.get('setting'))
 		}
 
 		const setting = await c.env.kv.get(KvConst.SETTING, { type: 'json' });
@@ -32,6 +32,7 @@ const settingService = {
 			throw new BizError('数据库未初始化 Database not initialized.');
 		}
 
+		const settingData = structuredClone(setting);
 		let domainList = c.env.domain;
 
 		if (typeof domainList === 'string') {
@@ -47,7 +48,7 @@ const settingService = {
 		}
 
 		domainList = domainList.map(item => '@' + item);
-		setting.domainList = domainList;
+		settingData.domainList = domainList;
 
 		let projectLink = c.env.project_link;
 		if (typeof projectLink === 'string' && projectLink === 'false') {
@@ -58,12 +59,12 @@ const settingService = {
 			projectLink = true
 		}
 
-		setting.projectLink = projectLink;
+		settingData.projectLink = projectLink;
 
-		setting.emailPrefixFilter = setting.emailPrefixFilter.split(",").filter(Boolean);
+		settingData.emailPrefixFilter = settingData.emailPrefixFilter.split(",").filter(Boolean);
 
-		c.set?.('setting', setting);
-		return setting;
+		c.set?.('setting', structuredClone(settingData));
+		return settingData;
 	},
 
 	async get(c, showSiteKey = false) {
@@ -74,48 +75,51 @@ const settingService = {
 		]);
 
 
+		const response = structuredClone(settingRow);
 		if (!showSiteKey) {
-			settingRow.siteKey = settingRow.siteKey ? `${settingRow.siteKey.slice(0, 6)}******` : null;
+			response.siteKey = response.siteKey ? `${response.siteKey.slice(0, 6)}******` : null;
 		}
 
-		settingRow.secretKey = settingRow.secretKey ? `${settingRow.secretKey.slice(0, 6)}******` : null;
+		response.secretKey = response.secretKey ? `${response.secretKey.slice(0, 6)}******` : null;
 
-		Object.keys(settingRow.resendTokens).forEach(key => {
-			settingRow.resendTokens[key] = `${settingRow.resendTokens[key].slice(0, 12)}******`;
+		Object.keys(response.resendTokens).forEach(key => {
+			response.resendTokens[key] = `${response.resendTokens[key].slice(0, 12)}******`;
 		});
 
-		settingRow.s3AccessKey = settingRow.s3AccessKey ? `${settingRow.s3AccessKey.slice(0, 12)}******` : null;
-		settingRow.s3SecretKey = settingRow.s3SecretKey ? `${settingRow.s3SecretKey.slice(0, 12)}******` : null;
-		settingRow.tgBotToken = settingRow.tgBotToken ? `${settingRow.tgBotToken.slice(0, 20)}******` : null;
-		settingRow.webhookSecret = settingRow.webhookSecret ? `${settingRow.webhookSecret.slice(0, 6)}******` : null;
-		settingRow.linuxdoClientSecret = settingRow.linuxdoClientSecret ? `${settingRow.linuxdoClientSecret.slice(0, 6)}******` : null;
-		settingRow.githubClientSecret = settingRow.githubClientSecret ? `${settingRow.githubClientSecret.slice(0, 6)}******` : null;
-		settingRow.googleClientSecret = settingRow.googleClientSecret ? `${settingRow.googleClientSecret.slice(0, 6)}******` : null;
-		settingRow.hasR2 = !!c.env.r2
-		settingRow.hasCfEmail = !!c.env.email
+		response.s3SecretKey = response.s3SecretKey ? `${response.s3SecretKey.slice(0, 12)}******` : null;
+		response.tgBotToken = response.tgBotToken ? `${response.tgBotToken.slice(0, 20)}******` : null;
+		response.webhookSecret = response.webhookSecret ? `${response.webhookSecret.slice(0, 6)}******` : null;
+		response.linuxdoClientSecret = response.linuxdoClientSecret ? `${response.linuxdoClientSecret.slice(0, 6)}******` : null;
+		response.githubClientSecret = response.githubClientSecret ? `${response.githubClientSecret.slice(0, 6)}******` : null;
+		response.googleClientSecret = response.googleClientSecret ? `${response.googleClientSecret.slice(0, 6)}******` : null;
+		response.hasR2 = !!c.env.r2
+		response.hasCfEmail = !!c.env.email
 
 		let regVerifyOpen = false
 		let addVerifyOpen = false
 
 		recordList.forEach(row => {
 			if (row.type === verifyRecordType.REG) {
-				regVerifyOpen = row.count >= settingRow.regVerifyCount
+				regVerifyOpen = row.count >= response.regVerifyCount
 			}
 			if (row.type === verifyRecordType.ADD) {
-				addVerifyOpen = row.count >= settingRow.addVerifyCount
+				addVerifyOpen = row.count >= response.addVerifyCount
 			}
 		})
 
-		settingRow.regVerifyOpen = regVerifyOpen
-		settingRow.addVerifyOpen = addVerifyOpen
+		response.regVerifyOpen = regVerifyOpen
+		response.addVerifyOpen = addVerifyOpen
 
-		settingRow.storageType = await r2Service.storageType(c);
+		response.storageType = await r2Service.storageType(c);
 
-		return settingRow;
+		return response;
 	},
 
 	async set(c, params) {
 		const settingData = await this.query(c);
+		const secretFields = ['siteKey','secretKey','r2Domain','s3AccessKey','s3SecretKey','tgBotToken','webhookSecret','linuxdoClientSecret','githubClientSecret','googleClientSecret'];
+		params = { ...params };
+		for (const field of secretFields) if (params[field] === undefined || (typeof params[field] === 'string' && params[field].endsWith('******'))) delete params[field];
 		let resendTokens = { ...settingData.resendTokens, ...params.resendTokens };
 		Object.keys(resendTokens).forEach(domain => {
 			if (!resendTokens[domain]) delete resendTokens[domain];

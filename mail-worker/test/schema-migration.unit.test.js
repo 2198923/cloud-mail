@@ -39,7 +39,7 @@ describe('controlled v3.1-v3.3 schema migration', () => {
     expect(firstRunCount).toBeGreaterThan(0);
     expect(db.state.executed.length).toBe(firstRunCount);
     expect(db.state.columns).toEqual(new Set([
-      'sync_delete', 'linuxdo_client_id', 'linuxdo_client_secret',
+      'sync_delete', 'oauth_platform', 'linuxdo_client_id', 'linuxdo_client_secret',
       'github_client_id', 'github_client_secret', 'google_client_id',
       'google_client_secret', 'linuxdo_switch', 'github_switch', 'google_switch',
       'auto_clean_days', 'auto_clean_exclude', 'webhook_url', 'webhook_status',

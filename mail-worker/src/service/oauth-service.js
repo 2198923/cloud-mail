@@ -1,7 +1,7 @@
 import BizError from "../error/biz-error";
 import orm from "../entity/orm";
 import {oauth} from "../entity/oauth";
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import userService from "./user-service";
 import loginService from "./login-service";
 import cryptoUtils from "../utils/crypto-utils";
@@ -12,9 +12,10 @@ const oauthService = {
 
 	async bindUser(c, params) {
 
-		const { email, oauthUserId, code } = params;
+		const { email, oauthUserId, platform, code } = params;
+		this.assertPlatform(platform);
 
-		const oauthRow = await this.getById(c, oauthUserId);
+		const oauthRow = await this.getById(c, oauthUserId, platform);
 
 		let userRow = await userService.selectByIdIncludeDel(c, oauthRow.userId);
 
@@ -26,10 +27,10 @@ const oauthService = {
 
 		userRow = await userService.selectByEmail(c, email);
 
-		orm(c).update(oauth).set({ userId: userRow.userId }).where(eq(oauth.oauthUserId, oauthUserId)).run();
+		const updated = await orm(c).update(oauth).set({ userId: userRow.userId }).where(and(eq(oauth.oauthUserId, oauthUserId), eq(oauth.platform, platform))).returning().get();
 		const jwtToken = await loginService.login(c, { email, password: null }, true);
 
-		return { userInfo: oauthRow, token: jwtToken}
+		return { userInfo: updated || { ...oauthRow, userId: userRow.userId }, token: jwtToken}
 	},
 
 	async linuxDoLogin(c, params) {
@@ -38,12 +39,16 @@ const oauthService = {
 
 		const setting = await settingService.query(c);
 		this.assertEnabled(setting, 'linuxdoSwitch');
+		const clientId = setting.linuxdoClientId || c.env.linuxdo_client_id;
+		const clientSecret = setting.linuxdoClientSecret || c.env.linuxdo_client_secret;
+		const callbackUrl = redirectUri || c.env.linuxdo_callback_url;
+		if (!clientId || !clientSecret || !callbackUrl) throw new BizError('LinuxDo OAuth credentials are not configured');
 
 		const reqParams = new URLSearchParams()
-		reqParams.append('client_id', setting.linuxdoClientId)
-		reqParams.append('client_secret', setting.linuxdoClientSecret)
+		reqParams.append('client_id', clientId)
+		reqParams.append('client_secret', clientSecret)
 		reqParams.append('code', code)
-		reqParams.append('redirect_uri', redirectUri)
+		reqParams.append('redirect_uri', callbackUrl)
 		reqParams.append('grant_type', 'authorization_code')
 
 		const tokenRes = await fetch("https://connect.linux.do/oauth2/token", {
@@ -194,12 +199,13 @@ const oauthService = {
 
 	async saveUser(c, userInfo) {
 
-		const userInfoRow = await this.getById(c, userInfo.oauthUserId);
+		this.assertPlatform(userInfo.platform);
+		const userInfoRow = await this.getById(c, userInfo.oauthUserId, userInfo.platform);
 
 		if (!userInfoRow) {
 			return await orm(c).insert(oauth).values(userInfo).returning().get();
 		} else {
-			return await orm(c).update(oauth).set(userInfo).where(eq(oauth.oauthUserId, userInfo.oauthUserId)).returning().get();
+			return await orm(c).update(oauth).set(userInfo).where(and(eq(oauth.oauthUserId, userInfo.oauthUserId), eq(oauth.platform, userInfo.platform))).returning().get();
 		}
 
 	},
@@ -210,8 +216,13 @@ const oauthService = {
 		}
 	},
 
-	async getById(c, oauthUserId) {
-		return await orm(c).select().from(oauth).where(eq(oauth.oauthUserId, oauthUserId)).get();
+	assertPlatform(platform) {
+		if (!['linuxdo', 'github', 'google'].includes(platform)) throw new BizError('invalid oauth platform');
+	},
+
+	async getById(c, oauthUserId, platform = 'linuxdo') {
+		this.assertPlatform(platform);
+		return await orm(c).select().from(oauth).where(and(eq(oauth.oauthUserId, oauthUserId), eq(oauth.platform, platform))).get();
 	},
 
 	async deleteByUserId(c, userId) {

@@ -1,5 +1,6 @@
 const V31_V33_COLUMNS = [
-  ['sync_delete', 'INTEGER NOT NULL DEFAULT 0'],
+  ['sync_delete', 'INTEGER NOT NULL DEFAULT 1'],
+  ['oauth_platform', "TEXT NOT NULL DEFAULT 'linuxdo'"],
   ['linuxdo_client_id', "TEXT NOT NULL DEFAULT ''"],
   ['linuxdo_client_secret', "TEXT NOT NULL DEFAULT ''"],
   ['github_client_id', "TEXT NOT NULL DEFAULT ''"],
@@ -30,6 +31,17 @@ const V31_V33_INDEXES = [
   ['idx_role_perm_role', 'role_perm(role_id)'],
   ['idx_oauth_oauth_user_id', 'oauth(oauth_user_id)'],
   ['idx_oauth_user_id', 'oauth(user_id)'],
+  ['idx_oauth_provider_user', 'oauth(oauth_user_id, platform)'],
+  ['idx_email_name_nocase', 'email(name COLLATE NOCASE)'],
+  ['idx_email_subject_nocase', 'email(subject COLLATE NOCASE)'],
+  ['idx_user_email_nocase', 'user(email COLLATE NOCASE)'],
+  ['idx_email_to_email_nocase', 'email(to_email COLLATE NOCASE)'],
+  ['idx_email_send_email_nocase', 'email(send_email COLLATE NOCASE)'],
+  ['idx_email_noone_id', 'email(email_id) WHERE status = 7'],
+  ['idx_account_user_del_sort', 'account(user_id, is_del, sort, account_id)'],
+  ['idx_email_saving_account', 'email(account_id) WHERE status = 6'],
+  ['idx_email_type_name', 'email(type, name)'],
+  ['idx_email_type_create_time', 'email(type, create_time)'],
 ];
 
 async function rows(db, sql) {
