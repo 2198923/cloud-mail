@@ -12,12 +12,12 @@ enabled = true
 
 [[d1_databases]]
 binding = "db"
-database_name = "cloud-mail-grok"
-database_id = "5ea31a7d-056c-45e9-ac31-492b9b22f33f"
+database_name = "email"
+database_id = "6ea512e9-1ab6-4f46-81f6-e14220171a7b"
 
 [[kv_namespaces]]
 binding = "kv"
-id = "06121b225b3048f2bd9f3de3776556f0"
+id = "b23b79fae6134889b322095ebce09708"
 
 #[[r2_buckets]]
 #binding = "r2"			#r2对象存储绑定名默认不可修改
